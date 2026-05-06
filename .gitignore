@@ -44,3 +44,6 @@ yarn-error.log*
 # Editor / OS specific
 .vscode/
 .idea/
+
+datasets*
+.venv

@@ -23,24 +23,6 @@ yarn-error.log*
 /cloud/mosquitto/data/
 /cloud/mosquitto/log/
 
-# Grafana generated assets and exports
-/cloud/grafana/png/
-/cloud/grafana/pdf/
-/cloud/grafana/csv/
-
-# Grafana plugin bundles (built JS files) - ignore compiled bundles
-/cloud/grafana/plugins/**/*.js
-/cloud/grafana/plugins/**/*.LICENSE.txt
-
-# Node-RED runtime config/backups
-/cloud/nodered/.config.nodes.json
-/cloud/nodered/.config.nodes.json.backup
-/cloud/nodered/.config.runtime.json
-/cloud/nodered/.config.runtime.json.backup
-/cloud/nodered/.config.users.json
-/cloud/nodered/.config.users.json.backup
-/cloud/nodered/.npm/
-
 # Editor / OS specific
 .vscode/
 .idea/

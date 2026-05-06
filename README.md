@@ -11,9 +11,10 @@ Proyek ini mendemonstrasikan cara menggunakan sensor gyroscope dan accelerometer
 3. [Koneksi Hardware](#koneksi-hardware)
 4. [Upload Kode ke ESP32](#upload-kode-ke-esp32)
 5. [Menjalankan Sensor](#menjalankan-sensor)
-6. [Penjelasan Kode](#penjelasan-kode)
-7. [Output Serial Monitor](#output-serial-monitor)
-8. [Troubleshooting](#troubleshooting)
+6. [MQTT Configuration](#mqtt-configuration)
+7. [Penjelasan Kode](#penjelasan-kode)
+8. [Output Serial Monitor](#output-serial-monitor)
+9. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -65,6 +66,31 @@ Setelah terinstal, atur pengaturan berikut:
 - **Tools → Board** → Pilih "ESP32 Dev Module"
 - **Tools → Port** → Pilih port COM yang sesuai (cek di Device Manager atau System Report)
 - **Tools → Upload Speed** → 115200
+
+### 4. Instalasi Library Dependencies
+
+Proyek ini memerlukan library Arduino tambahan untuk komunikasi I2C dan MQTT. Ikuti langkah berikut untuk menginstal:
+
+#### Library yang Diperlukan
+
+1. **Wire** - Sudah built-in (tidak perlu install)
+2. **PubSubClient** - Untuk komunikasi MQTT dengan broker
+
+#### Cara Install PubSubClient
+
+1. Buka Arduino IDE
+2. Pergi ke **Sketch → Include Library → Manage Libraries** (atau tekan `Ctrl+Shift+I`)
+3. Di kolom pencarian, ketik: `PubSubClient`
+4. Cari hasil dengan penulis **Nick O'Leary**
+5. Klik tombol **Install**
+6. Tunggu hingga instalasi selesai (biasanya 1-2 menit)
+
+**Versi yang direkomendasikan**: 2.8.0 atau lebih baru
+
+#### Verifikasi Instalasi
+
+- Buka **Sketch → Include Library**
+- Jika Anda melihat **PubSubClient** di daftar library, maka instalasi berhasil
 
 ---
 
@@ -175,6 +201,115 @@ ESP32 DevKit V1                    MPU6050
 
 - **Jika data berhasil**, Anda akan melihat **nilai-nilai berubah** di Serial Monitor ketika Anda **goyangkan atau putar board**
 - Jika nilai tidak berubah, periksa koneksi hardware dan inisialisasi ulang
+
+---
+
+## MQTT Configuration
+
+### Persiapan MQTT Broker
+
+Sebelum mengirim data ke MQTT broker, pastikan Anda memiliki:
+
+1. **MQTT Broker** yang sedang berjalan (misalnya: Mosquitto, HiveMQ, atau layanan cloud)
+2. **Alamat IP/Hostname** broker
+3. **Port MQTT** (default: 1883)
+4. **Username dan Password** (jika broker memerlukan autentikasi)
+
+### Konfigurasi WiFi dan MQTT di Kode
+
+Edit file `hardware/sensor.ino` dan ubah konfigurasi berikut di bagian atas file:
+
+```cpp
+// --- MQTT & WiFi configuration (edit these) ---
+const char* WIFI_SSID = "YOUR_SSID";           // Ganti dengan nama WiFi Anda
+const char* WIFI_PASS = "YOUR_PASSWORD";       // Ganti dengan password WiFi
+const char* MQTT_SERVER = "192.168.1.100";     // Ganti dengan IP/hostname broker
+const uint16_t MQTT_PORT = 1883;               // Port default MQTT (ubah jika perlu)
+const char* MQTT_USER = "";                    // Username broker (kosongkan jika tidak perlu)
+const char* MQTT_PASS = "";                    // Password broker (kosongkan jika tidak perlu)
+const char* MQTT_TOPIC = "sensors/mpu6050";    // Topic untuk publish data
+```
+
+### Contoh Konfigurasi untuk Mosquitto Lokal
+
+Jika Anda menjalankan Mosquitto di komputer lokal dengan IP `192.168.1.100`:
+
+```cpp
+const char* WIFI_SSID = "MyWiFi";
+const char* WIFI_PASS = "MyPassword123";
+const char* MQTT_SERVER = "192.168.1.100";
+const uint16_t MQTT_PORT = 1883;
+const char* MQTT_USER = "";  // Jika auth disabled
+const char* MQTT_PASS = "";
+const char* MQTT_TOPIC = "sensors/mpu6050";
+```
+
+### Cara Kerja Publishing Data
+
+Setelah konfigurasi selesai:
+
+1. **ESP32 akan terhubung ke WiFi** saat startup
+2. **ESP32 akan terhubung ke MQTT broker** jika WiFi berhasil
+3. **Data sensor dikirim ke MQTT topic** setiap 200ms dalam format JSON:
+
+```json
+{"roll":2.45,"pitch":-1.23,"gx":0.20,"gy":-0.15,"gz":0.10}
+```
+
+1. Pesan akan muncul di Serial Monitor:
+   - `Menghubungkan ke WiFi.` (dengan titik-titik saat menunggu)
+   - `WiFi terhubung` (jika berhasil)
+   - `IP: 192.168.1.XX` (IP yang diperoleh ESP32)
+   - `Menghubungkan ke MQTT broker...` (setiap 2 detik jika belum terkoneksi)
+   - `MQTT terkoneksi` (jika berhasil)
+
+### Monitoring Data MQTT
+
+#### Option 1: Menggunakan MQTT Explorer (GUI)
+
+1. Download MQTT Explorer dari <https://github.com/thomasnordquist/MQTT-Explorer>
+2. Buka aplikasi
+3. Klik "+" untuk tambah koneksi baru
+4. Masukkan:
+   - **Host**: Alamat IP broker Anda
+   - **Port**: 1883
+   - **Username/Password**: Jika diperlukan
+5. Klik "CONNECT"
+6. Di bagian kiri, Anda akan melihat topic `sensors/mpu6050` dengan data yang streaming
+
+#### Option 2: Menggunakan Command Line `mosquitto_sub`
+
+```bash
+mosquitto_sub -h 192.168.1.100 -t "sensors/mpu6050"
+```
+
+Anda akan melihat output data sensor real-time:
+
+```
+{"roll":2.45,"pitch":-1.23,"gx":0.20,"gy":-0.15,"gz":0.10}
+{"roll":2.48,"pitch":-1.20,"gx":0.22,"gy":-0.18,"gz":0.12}
+{"roll":15.67,"pitch":8.90,"gx":45.30,"gy":32.10,"gz":5.50}
+```
+
+### Troubleshooting MQTT
+
+**Masalah**: WiFi tidak terkoneksi
+
+- Periksa SSID dan password WiFi
+- Pastikan ESP32 berada dalam jangkauan WiFi
+
+**Masalah**: MQTT broker tidak terkoneksi
+
+- Verifikasi IP/hostname broker benar
+- Pastikan broker sedang berjalan
+- Periksa username/password jika menggunakan autentikasi
+- Pastikan firewall tidak memblokir port 1883
+
+**Masalah**: Data tidak terlihat di MQTT topic
+
+- Verifikasi ESP32 terhubung ke WiFi (cek Serial Monitor)
+- Pastikan ESP32 terhubung ke MQTT broker
+- Coba subscribe dengan `mosquitto_sub` untuk verifikasi broker
 
 ---
 

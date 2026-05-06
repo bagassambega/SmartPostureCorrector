@@ -1,0 +1,46 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs and temp files
+*.log
+*.tmp
+*.bak
+*.swp
+
+# Node deps / package manager
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Cloud runtime / build artifacts (ignore large/generated files)
+# InfluxDB runtime DB and engine data
+/cloud/influxdb/influxd.bolt
+/cloud/influxdb/engine/data/
+
+# Mosquitto runtime data and logs
+/cloud/mosquitto/data/
+/cloud/mosquitto/log/
+
+# Grafana generated assets and exports
+/cloud/grafana/png/
+/cloud/grafana/pdf/
+/cloud/grafana/csv/
+
+# Grafana plugin bundles (built JS files) - ignore compiled bundles
+/cloud/grafana/plugins/**/*.js
+/cloud/grafana/plugins/**/*.LICENSE.txt
+
+# Node-RED runtime config/backups
+/cloud/nodered/.config.nodes.json
+/cloud/nodered/.config.nodes.json.backup
+/cloud/nodered/.config.runtime.json
+/cloud/nodered/.config.runtime.json.backup
+/cloud/nodered/.config.users.json
+/cloud/nodered/.config.users.json.backup
+/cloud/nodered/.npm/
+
+# Editor / OS specific
+.vscode/
+.idea/

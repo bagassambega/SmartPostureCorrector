@@ -12,9 +12,10 @@ Proyek ini mendemonstrasikan cara menggunakan sensor gyroscope dan accelerometer
 4. [Upload Kode ke ESP32](#upload-kode-ke-esp32)
 5. [Menjalankan Sensor](#menjalankan-sensor)
 6. [MQTT Configuration](#mqtt-configuration)
-7. [Penjelasan Kode](#penjelasan-kode)
-8. [Output Serial Monitor](#output-serial-monitor)
-9. [Troubleshooting](#troubleshooting)
+7. [Cloud Analytics Stack (Go Custom Service)](#cloud-analytics-stack-go-custom-service)
+8. [Penjelasan Kode](#penjelasan-kode)
+9. [Output Serial Monitor](#output-serial-monitor)
+10. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -310,6 +311,51 @@ Anda akan melihat output data sensor real-time:
 - Verifikasi ESP32 terhubung ke WiFi (cek Serial Monitor)
 - Pastikan ESP32 terhubung ke MQTT broker
 - Coba subscribe dengan `mosquitto_sub` untuk verifikasi broker
+
+---
+
+## Cloud Analytics Stack (Go Custom Service)
+
+Proyek cloud ini sekarang menggunakan **satu service custom berbasis Golang** sebagai:
+
+1. **MQTT consumer** untuk menerima payload sensor dari topic `sensors/mpu6050`
+2. **InfluxDB writer** untuk menyimpan data sensor (`roll`, `pitch`, `gx`, `gy`, `gz`)
+3. **Backend API + Frontend dashboard** untuk membaca data dari InfluxDB dan menampilkan grafik analytics
+
+`Node-RED` dan `Grafana` sudah dihapus dari `docker-compose`, sehingga pipeline cloud menjadi:
+
+`ESP32 -> MQTT (Mosquitto) -> analytics-service (Go) -> InfluxDB -> Dashboard (service Go yang sama)`
+
+### Jalankan Stack Cloud
+
+Dari folder `cloud/` jalankan:
+
+```bash
+docker compose up -d --build
+```
+
+Service yang aktif:
+
+1. `mosquitto` pada port `1883`
+2. `influxdb` pada port `8086`
+3. `analytics-service` pada port `3000`
+
+### Akses Dashboard
+
+Buka browser ke:
+
+<http://localhost:3000>
+
+Fitur dashboard:
+
+1. Pilih metric (`roll`, `pitch`, `gx`, `gy`, `gz`)
+2. Pilih rentang waktu (`15m`, `1h`, `6h`, `24h`)
+3. Refresh otomatis tiap 5 detik
+
+### Endpoint API
+
+1. Health check: `GET /healthz`
+2. Data series: `GET /api/series?field=roll&range=1h&window=2s`
 
 ---
 

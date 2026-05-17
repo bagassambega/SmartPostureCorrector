@@ -2,6 +2,10 @@
 #include <WiFi.h>
 #include <PubSubClient.h>
 
+// Print specs
+#include "esp_system.h"
+#include "esp_spi_flash.h"
+
 // Alamat I2C MPU6050 (0x68 jika AD0 ke GND)
 #define MPU6050_ADDR 0x68
 
@@ -10,6 +14,13 @@
 #define ACCEL_XOUT_H 0x3B
 #define GYRO_XOUT_H 0x43
 
+// Push button
+#define CALIB_BUTTON_PIN 14
+
+// SDA dan SCL sensor MPU6050
+#define SDA_PIN 21
+#define SCL_PIN 22
+
 // Variabel untuk menyimpan offset gyro
 float gyroOffsetX = 0, gyroOffsetY = 0, gyroOffsetZ = 0;
 
@@ -17,13 +28,19 @@ float gyroOffsetX = 0, gyroOffsetY = 0, gyroOffsetZ = 0;
 int16_t accX, accY, accZ;
 int16_t gyroX, gyroY, gyroZ;
 
+// Kalibrasi roll dan gyro
+float rollOffset = 0;
+float pitchOffset = 0;
+float rawRoll = 0;
+float rawPitch = 0;
+
 // Variabel untuk hitungan waktu (opsional untuk integrasi yaw)
 unsigned long lastTime = 0;
 
 // --- MQTT & WiFi configuration (edit these) ---
 const char *WIFI_SSID = "Jenong Smart";
 const char *WIFI_PASS = "jenong21";
-const char *MQTT_SERVER = "192.168.1.9"; // ganti ke alamat broker Anda
+const char *MQTT_SERVER = "192.168.1.10"; // ganti ke alamat broker Anda
 const uint16_t MQTT_PORT = 1883;
 const char *MQTT_USER = ""; // isi jika broker perlu auth
 const char *MQTT_PASS = ""; // isi jika broker perlu auth
@@ -35,10 +52,16 @@ PubSubClient mqttClient(espClient);
 unsigned long lastPublish = 0;
 const unsigned long PUBLISH_INTERVAL = 200; // ms
 
+bool lastButtonState = HIGH;
+unsigned long lastDebounceTime = 0;
+const unsigned long debounceDelay = 50;
+
 void setup()
 {
   Serial.begin(115200);
-  Wire.begin(21, 22); // SDA=21, SCL=22
+  Wire.begin(SDA_PIN, SCL_PIN); // SDA=21, SCL=22
+
+  pinMode(CALIB_BUTTON_PIN, INPUT_PULLUP);
 
   // Inisialisasi WiFi
   Serial.print("Menghubungkan ke WiFi");
@@ -73,7 +96,6 @@ void setup()
 
   // Konfigurasi accelerometer (±2g) dan gyro (±250°/s) menggunakan register konfigurasi
   // (Opsional: set register 0x1C untuk accel, 0x1B untuk gyro, default sudah ±2g dan ±250°/s)
-
   delay(100);
   kalibrasiGyro();
 
@@ -83,6 +105,33 @@ void setup()
 
 void loop()
 {
+  bool currentButtonState = digitalRead(CALIB_BUTTON_PIN);
+
+  // Deteksi transisi HIGH -> LOW (button pressed)
+  if (lastButtonState == LOW && currentButtonState == HIGH)
+  {
+      if (millis() - lastDebounceTime > debounceDelay)
+      {
+          Serial.println();
+          Serial.println("=================================");
+          Serial.println("Button dilepas");
+          Serial.println("Memulai re-kalibrasi gyro...");
+          Serial.println("Pastikan sensor diam");
+          Serial.println("=================================");
+
+          delay(300);
+
+          rollOffset = rawRoll;
+          pitchOffset = rawPitch;
+          kalibrasiOrientasi();
+          kalibrasiGyro();
+
+          lastDebounceTime = millis();
+      }
+  }
+
+  lastButtonState = currentButtonState;
+
   // Pastikan koneksi MQTT aktif
   if (!mqttClient.connected())
   {
@@ -118,8 +167,11 @@ void loop()
   float az = accZ / 16384.0;
 
   // Hitung roll (kemiringan sumbu X) dan pitch (kemiringan sumbu Y)
-  float roll = atan2(ay, az) * 180.0 / PI;
-  float pitch = atan2(-ax, sqrt(ay * ay + az * az)) * 180.0 / PI;
+  rawRoll = atan2(ay, az) * 180.0 / PI;
+  rawPitch = atan2(-ax, sqrt(ay * ay + az * az)) * 180.0 / PI;
+
+  float roll = rawRoll - rollOffset;
+  float pitch = rawPitch - pitchOffset;
 
   // Konversi gyro ke derajat per detik (skala 131 untuk ±250°/s)
   float gx = (gyroX - gyroOffsetX) / 131.0;
@@ -145,7 +197,16 @@ void loop()
     if (mqttClient.connected())
     {
       char payload[128];
-      snprintf(payload, sizeof(payload), "{\"roll\":%.2f,\"pitch\":%.2f,\"gx\":%.2f,\"gy\":%.2f,\"gz\":%.2f}", roll, pitch, gx, gy, gz);
+      unsigned long timestamp = millis();
+      // snprintf(payload, sizeof(payload), "{\"roll\":%.2f,\"pitch\":%.2f,\"gx\":%.2f,\"gy\":%.2f,\"gz\":%.2f}", roll, pitch, gx, gy, gz);
+      snprintf(
+          payload,
+          sizeof(payload),
+          "{\"timestamp\":%lu,\"roll\":%.2f,\"pitch\":%.2f}",
+          timestamp,
+          roll,
+          pitch
+      );
       boolean ok = mqttClient.publish(MQTT_TOPIC, payload);
       if (!ok)
         Serial.println("Gagal publish MQTT");
@@ -178,19 +239,74 @@ void bacaSensorRaw()
 // Kalibrasi gyro dengan merata-rata 200 sampel saat sensor diam
 void kalibrasiGyro()
 {
-  float sumX = 0, sumY = 0, sumZ = 0;
-  int sample = 200;
-  Serial.println("Kalibrasi gyro... jangan gerakkan sensor!");
-  for (int i = 0; i < sample; i++)
-  {
+    float sumX = 0;
+    float sumY = 0;
+    float sumZ = 0;
+
+    const int sample = 200;
+
+    Serial.println("Calibrating...");
+    
+    for (int i = 0; i < sample; i++)
+    {
+        bacaSensorRaw();
+
+        sumX += gyroX;
+        sumY += gyroY;
+        sumZ += gyroZ;
+
+        delay(5);
+    }
+
+    gyroOffsetX = sumX / sample;
+    gyroOffsetY = sumY / sample;
+    gyroOffsetZ = sumZ / sample;
+
+    Serial.println("Calibration finished");
+
+    Serial.print("Offset X: ");
+    Serial.println(gyroOffsetX);
+
+    Serial.print("Offset Y: ");
+    Serial.println(gyroOffsetY);
+
+    Serial.print("Offset Z: ");
+    Serial.println(gyroOffsetZ);
+
+    // Validasi sederhana
+    if (abs(gyroOffsetX) > 1000 ||
+        abs(gyroOffsetY) > 1000 ||
+        abs(gyroOffsetZ) > 1000)
+    {
+        Serial.println("WARNING: Calibration may have failed");
+    }
+
+    Serial.println("=================================");
+}
+
+void kalibrasiOrientasi()
+{
     bacaSensorRaw();
-    sumX += gyroX;
-    sumY += gyroY;
-    sumZ += gyroZ;
-    delay(5);
-  }
-  gyroOffsetX = sumX / sample;
-  gyroOffsetY = sumY / sample;
-  gyroOffsetZ = sumZ / sample;
-  Serial.println("Kalibrasi selesai.");
+
+    // Konversi accelerometer ke satuan g
+    float ax = accX / 16384.0;
+    float ay = accY / 16384.0;
+    float az = accZ / 16384.0;
+
+    // Simpan posisi saat ini sebagai baseline baru
+    rollOffset = atan2(ay, az) * 180.0 / PI;
+
+    pitchOffset =
+        atan2(-ax, sqrt(ay * ay + az * az)) * 180.0 / PI;
+
+    Serial.println("=================================");
+    Serial.println("Orientation calibrated");
+    
+    Serial.print("Roll offset: ");
+    Serial.println(rollOffset);
+
+    Serial.print("Pitch offset: ");
+    Serial.println(pitchOffset);
+
+    Serial.println("=================================");
 }

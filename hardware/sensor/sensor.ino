@@ -59,6 +59,8 @@ const unsigned long debounceDelay = 50;
 void setup()
 {
   Serial.begin(115200);
+  delay(2000);
+  printESP32Specs();
   Wire.begin(SDA_PIN, SCL_PIN); // SDA=21, SCL=22
 
   pinMode(CALIB_BUTTON_PIN, INPUT_PULLUP);
@@ -309,4 +311,60 @@ void kalibrasiOrientasi()
     Serial.println(pitchOffset);
 
     Serial.println("=================================");
+}
+
+void printESP32Specs()
+{
+    Serial.println("===== ESP32 SYSTEM INFO =====");
+
+    // Chip model
+    Serial.print("Chip Model: ");
+    Serial.println(ESP.getChipModel());
+
+    // Revision
+    Serial.print("Chip Revision: ");
+    Serial.println(ESP.getChipRevision());
+
+    // Core count
+    Serial.print("CPU Cores: ");
+    Serial.println(ESP.getChipCores());
+
+    // CPU frequency
+    Serial.print("CPU Frequency (MHz): ");
+    Serial.println(ESP.getCpuFreqMHz());
+
+    // Flash size
+    Serial.print("Flash Size (bytes): ");
+    Serial.println(ESP.getFlashChipSize());
+
+    Serial.print("Flash Speed (Hz): ");
+    Serial.println(ESP.getFlashChipSpeed());
+
+    // Heap memory
+    Serial.print("Free Heap (bytes): ");
+    Serial.println(ESP.getFreeHeap());
+
+    Serial.print("Min Free Heap (bytes): ");
+    Serial.println(ESP.getMinFreeHeap());
+
+    Serial.print("Max Alloc Heap (bytes): ");
+    Serial.println(ESP.getMaxAllocHeap());
+
+    // PSRAM
+    if (psramFound())
+    {
+        Serial.println("PSRAM: FOUND");
+
+        Serial.print("PSRAM Size (bytes): ");
+        Serial.println(ESP.getPsramSize());
+
+        Serial.print("Free PSRAM (bytes): ");
+        Serial.println(ESP.getFreePsram());
+    }
+    else
+    {
+        Serial.println("PSRAM: NOT FOUND");
+    }
+
+    Serial.println("=============================");
 }

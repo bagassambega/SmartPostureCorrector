@@ -21,41 +21,61 @@
 #define SDA_PIN 21
 #define SCL_PIN 22
 
-// Variabel untuk menyimpan offset gyro
+// Variabel untuk menyimpan offset gyro (nilai error rata-rata gyro saat diam)
+// Nilai ini dihitung dalam fungsi kalibrasiGyro() dan digunakan untuk menyesuaikan pembacaan gyro agar akurat
 float gyroOffsetX = 0, gyroOffsetY = 0, gyroOffsetZ = 0;
 
-// Variabel untuk data mentah
+// Variabel untuk menyimpan data mentah accelerometer dan gyroscope dari register MPU6050
+// Diperbarui setiap pemanggilan fungsi bacaSensorRaw()
 int16_t accX, accY, accZ;
 int16_t gyroX, gyroY, gyroZ;
 
-// Kalibrasi roll dan gyro
+// Variabel untuk menyimpan nilai kalibrasi (offset) roll dan pitch
+// Digunakan dengan mengurangi pembacaan raw dengan offset untuk mendapat sudut kemiringan relatif (titik 0 baru)
 float rollOffset = 0;
 float pitchOffset = 0;
+
+// Variabel untuk menyimpan sudut roll (sumbu X) dan pitch (sumbu Y) asli yang didapat melalui fungsi arctan
 float rawRoll = 0;
 float rawPitch = 0;
 
-// Variabel untuk hitungan waktu (opsional untuk integrasi yaw)
+// Variabel untuk menyimpan catatan waktu mikrodetik terakhir (opsional untuk perhitungan integral yaw timer)
 unsigned long lastTime = 0;
 
 // --- MQTT & WiFi configuration (edit these) ---
+// Variabel penyimpan SSID dan kata sandi WiFi agar ESP32 bisa connect ke router
 const char *WIFI_SSID = "Jenong Smart";
 const char *WIFI_PASS = "jenong21";
+
+// Server broker MQTT dan Port (alamat perangkat sentral untuk ESP32 mengirim data)
 const char *MQTT_SERVER = "192.168.1.10"; // ganti ke alamat broker Anda
 const uint16_t MQTT_PORT = 1883;
+
+// Username dan Password untuk autentikasi keamanan MQTT (jika ada)
 const char *MQTT_USER = ""; // isi jika broker perlu auth
 const char *MQTT_PASS = ""; // isi jika broker perlu auth
+
+// Topik pub/sub MQTT tempat ESP32 akan melemparkan parameter sudut (roll, pitch)
 const char *MQTT_TOPIC = "sensors/mpu6050";
 
+// Interface untuk WiFi klien dan modul PubSubClient untuk mengurus koneksi MQTT
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
 
+// Variabel untuk waktu (dalam ms) terakhir kali sensor mempublikasikan data MQTT
+// Digunakan dalam loop() untuk mekanisme non-blocking delay setiap interval tertentu
 unsigned long lastPublish = 0;
-const unsigned long PUBLISH_INTERVAL = 200; // ms
+const unsigned long PUBLISH_INTERVAL = 200; // ms (interval publish ke MQTT)
 
+// Variabel status button sebelumnya untuk mendeteksi kapan state tombol berubah (Edge Detection)
 bool lastButtonState = HIGH;
+// Variabel untuk debouncing hardware (mekanisme anti-bounce saklar mekanik) 
 unsigned long lastDebounceTime = 0;
-const unsigned long debounceDelay = 50;
+const unsigned long debounceDelay = 50;  // waktu tunda debounce 50ms
 
+// Fungsi setup() dijalankan satu kali saat perangkat pertama kali dinyalakan.
+// Bertugas untuk menginisialisasi Serial komunikasi, protokol I2C, menetapkan mode pin, 
+// membangun koneksi dengan WiFi dan server MQTT, serta mengkonfigurasi dan melakukan proses kalibrasi awal MPU6050.
 void setup()
 {
   Serial.begin(115200);
@@ -105,6 +125,10 @@ void setup()
   Serial.println("MPU6050 siap. Data: Roll(°), Pitch(°), GyroX(°/s), GyroY(°/s), GyroZ(°/s)");
 }
 
+// Fungsi loop() berjalan terus-menerus selama alat aktif.
+// Bertujuan untuk membaca sensor, merespon input tombol untuk kalibrasi ulang orientasi,
+// menghitung logik derajat kemiringan secara matematis, mengurus koneksi ulang (reconnect) MQTT jika terputus,
+// dan mengirimkan payload data orientasi yang telah dikalkulasi tersebut ke server MQTT setiap PUBLISH_INTERVAL.
 void loop()
 {
   bool currentButtonState = digitalRead(CALIB_BUTTON_PIN);
@@ -220,7 +244,9 @@ void loop()
   delay(50); // baca setiap 50 ms
 }
 
-// Fungsi baca data mentah dari MPU6050
+// Fungsi bacaSensorRaw() membaca 14 byte register berurutan dari MPU6050 lewat bus I2C.
+// Secara spesifik data ini memuat nilai accelerometer (X, Y, Z), sensor suhu (abaikan), dan gyroscope (X, Y, Z).
+// Dipanggil setiap siklus untuk memperbarui variabel mentah di atas sebelum dikonversi dan diolah (akselerasi dan rotasi).
 void bacaSensorRaw()
 {
   Wire.beginTransmission(MPU6050_ADDR);

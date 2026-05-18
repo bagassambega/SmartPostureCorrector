@@ -14,14 +14,24 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# Cloud runtime / build artifacts (ignore large/generated files)
-# InfluxDB runtime DB and engine data
+# Cloud / IoT Infrastructure
+# Environment & Secrets
+/cloud/.env
+/cloud/.env.local
+/cloud/.env.*.local
+
+# MQTT Broker
+/cloud/mosquitto/config/passwords.txt
+/cloud/mosquitto/config/passwords.txt.backup
+/cloud/mosquitto/data/
+/cloud/mosquitto/log/
+
+# InfluxDB runtime data
 /cloud/influxdb/influxd.bolt
 /cloud/influxdb/engine/data/
 
-# Mosquitto runtime data and logs
-/cloud/mosquitto/data/
-/cloud/mosquitto/log/
+# Docker artifacts
+/cloud/analytics-service/.dockerignore
 
 # Editor / OS specific
 .vscode/

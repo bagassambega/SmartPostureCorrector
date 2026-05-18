@@ -9,6 +9,18 @@ services:
       - ./mosquitto/config:/mosquitto/config
       - ./mosquitto/data:/mosquitto/data
       - ./mosquitto/log:/mosquitto/log
+    healthcheck:
+      test: ["CMD", "mosquitto_sub", "-h", "localhost", "-t", "$$SYS/broker/clients/connected", "-C", "1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - iot-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   influxdb:
     image: influxdb:2.7
@@ -20,11 +32,23 @@ services:
       - ./influxdb:/var/lib/influxdb2
     environment:
       - DOCKER_INFLUXDB_INIT_MODE=setup
-      - DOCKER_INFLUXDB_INIT_USERNAME=admin
-      - DOCKER_INFLUXDB_INIT_PASSWORD=password1234
-      - DOCKER_INFLUXDB_INIT_ORG=my-org
-      - DOCKER_INFLUXDB_INIT_BUCKET=iot_data
-      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=my-super-secret-auth-token
+      - DOCKER_INFLUXDB_INIT_USERNAME=${INFLUXDB_USERNAME:-admin}
+      - DOCKER_INFLUXDB_INIT_PASSWORD=${INFLUXDB_PASSWORD:-changeme123}
+      - DOCKER_INFLUXDB_INIT_ORG=${INFLUXDB_ORG:-my-org}
+      - DOCKER_INFLUXDB_INIT_BUCKET=${INFLUXDB_BUCKET:-iot_data}
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=${INFLUXDB_TOKEN:-change-me-to-secret-token}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8086/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - iot-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   analytics-service:
     build:
@@ -40,10 +64,23 @@ services:
       - MQTT_TOPIC=sensors/mpu6050
       - MQTT_CLIENT_ID=analytics-service
       - INFLUX_URL=http://influxdb:8086
-      - INFLUX_TOKEN=my-super-secret-auth-token
-      - INFLUX_ORG=my-org
-      - INFLUX_BUCKET=iot_data
+      - INFLUX_TOKEN=${INFLUXDB_TOKEN:-change-me-to-secret-token}
+      - INFLUX_ORG=${INFLUXDB_ORG:-my-org}
+      - INFLUX_BUCKET=${INFLUXDB_BUCKET:-iot_data}
       - INFLUX_MEASUREMENT=mpu6050
     depends_on:
-      - mosquitto
-      - influxdb
+      mosquitto:
+        condition: service_healthy
+      influxdb:
+        condition: service_healthy
+    networks:
+      - iot-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  iot-network:
+    driver: bridge

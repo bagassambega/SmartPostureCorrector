@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="en">
+<html lang="id">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Encok-Cok Analytics</title>
+  <title>EncokCok Smart Posture Corrector</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
     :root {
@@ -13,10 +13,10 @@
       --text: #edf6ff;
       --muted: #b5c8d8;
       --primary: #2dd4bf;
-      --accent: #f59e0b;
-      --danger: #ef4444;
+      --good: #22c55e;
+      --bad: #ef4444;
+      --warn: #f59e0b;
     }
-
     * { box-sizing: border-box; }
     body {
       margin: 0;
@@ -28,238 +28,380 @@
         linear-gradient(180deg, var(--bg) 0%, var(--bg2) 100%);
       min-height: 100vh;
     }
-
-    .container {
-      max-width: 980px;
-      margin: 0 auto;
-      padding: 24px 16px 40px;
-    }
-
-    h1 {
-      margin: 0 0 8px;
-      font-size: clamp(1.6rem, 4vw, 2.4rem);
-      letter-spacing: 0.02em;
-    }
-
-    .subtitle {
-      margin: 0 0 20px;
-      color: var(--muted);
-    }
-
-    .controls {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-      gap: 12px;
-      margin-bottom: 14px;
-    }
-
+    .container { max-width: 1200px; margin: 0 auto; padding: 24px 16px 48px; }
+    h1 { margin: 0 0 6px; font-size: clamp(1.5rem, 4vw, 2.2rem); }
+    .subtitle { margin: 0 0 20px; color: var(--muted); }
+    .grid { display: grid; gap: 14px; }
+    .grid-2 { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+    .grid-3 { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
     .panel {
       background: var(--card);
-      border: 1px solid rgba(255, 255, 255, 0.12);
-      backdrop-filter: blur(8px);
+      border: 1px solid rgba(255,255,255,0.12);
       border-radius: 14px;
-      padding: 12px;
+      padding: 16px;
+      backdrop-filter: blur(8px);
     }
-
-    label {
-      display: block;
-      margin-bottom: 6px;
-      color: var(--muted);
-      font-size: 0.92rem;
-    }
-
+    label { display: block; margin-bottom: 6px; color: var(--muted); font-size: 0.9rem; }
     select, button {
       width: 100%;
       border-radius: 10px;
-      border: 1px solid rgba(255, 255, 255, 0.22);
-      background: rgba(0, 0, 0, 0.25);
+      border: 1px solid rgba(255,255,255,0.22);
+      background: rgba(0,0,0,0.25);
       color: var(--text);
       padding: 9px 10px;
-      font-size: 0.96rem;
+      font-size: 0.95rem;
     }
-
     button {
       border: none;
       cursor: pointer;
       background: linear-gradient(110deg, var(--primary), #22c55e);
       color: #03202a;
       font-weight: 700;
-      margin-top: 24px;
     }
-
-    button:hover { filter: brightness(1.06); }
-
-    .status {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      margin: 8px 0 16px;
-      color: var(--muted);
+    .status-card { text-align: center; }
+    .posture-label {
+      font-size: 1.6rem;
+      font-weight: 700;
+      margin: 8px 0;
+      text-transform: capitalize;
+    }
+    .badge {
+      display: inline-block;
+      padding: 6px 14px;
+      border-radius: 999px;
+      font-weight: 700;
       font-size: 0.9rem;
     }
-
-    .dot {
-      width: 10px;
-      height: 10px;
-      border-radius: 50%;
-      background: var(--accent);
-      box-shadow: 0 0 0 6px rgba(245, 158, 11, 0.2);
+    .badge.good { background: rgba(34,197,94,0.2); color: var(--good); }
+    .badge.bad { background: rgba(239,68,68,0.2); color: var(--bad); }
+    .metric-value { font-size: 1.8rem; font-weight: 700; margin: 4px 0; }
+    .metric-label { color: var(--muted); font-size: 0.85rem; }
+    .alert-banner {
+      display: none;
+      background: rgba(239,68,68,0.15);
+      border: 1px solid rgba(239,68,68,0.4);
+      color: #fecaca;
+      padding: 12px 16px;
+      border-radius: 12px;
+      margin-bottom: 14px;
+      font-weight: 600;
     }
-
-    .dot.ok {
-      background: #22c55e;
-      box-shadow: 0 0 0 6px rgba(34, 197, 94, 0.2);
-    }
-
-    .dot.err {
-      background: var(--danger);
-      box-shadow: 0 0 0 6px rgba(239, 68, 68, 0.2);
-    }
-
-    .chart {
-      background: var(--card);
-      border: 1px solid rgba(255, 255, 255, 0.12);
-      border-radius: 18px;
-      padding: 12px;
-      min-height: 420px;
-    }
+    .alert-banner.show { display: block; }
+    .chart-panel { min-height: 320px; }
+    .chart-panel canvas { width: 100% !important; height: 280px !important; }
+    .section-title { margin: 0 0 10px; font-size: 1rem; color: var(--muted); }
+    .debug-section { margin-top: 24px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 20px; }
+    .status-row { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 0.88rem; margin-bottom: 10px; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--warn); }
+    .dot.ok { background: var(--good); }
+    .dot.err { background: var(--bad); }
+    .summary-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+    .summary-item { background: rgba(0,0,0,0.2); border-radius: 10px; padding: 10px; }
   </style>
 </head>
 <body>
   <div class="container">
-    <h1>Encok-Cok Analytics Dashboard</h1>
-    <p class="subtitle">Custom Go service untuk ingest MQTT ke InfluxDB dan visualisasi data sensor.</p>
+    <h1>EncokCok Smart Posture Corrector</h1>
+    <p class="subtitle">Dashboard postur real-time dari ESP32 + MPU6050</p>
 
-    <div class="controls">
+    <div id="alertBanner" class="alert-banner">
+      Peringatan: Postur buruk terdeteksi lebih dari 30 detik. Perbaiki postur Anda!
+    </div>
+
+    <div class="grid grid-2" style="margin-bottom:14px">
       <div class="panel">
-        <label for="field">Metric</label>
-        <select id="field">
-          <option value="roll">roll</option>
-          <option value="pitch">pitch</option>
-          <option value="gx">gx</option>
-          <option value="gy">gy</option>
-          <option value="gz">gz</option>
-        </select>
+        <label for="deviceSelect">Device</label>
+        <select id="deviceSelect"><option value="">Memuat device...</option></select>
       </div>
-
       <div class="panel">
-        <label for="range">Range</label>
-        <select id="range">
-          <option value="15m">15 menit</option>
-          <option value="1h" selected>1 jam</option>
-          <option value="6h">6 jam</option>
-          <option value="24h">24 jam</option>
-        </select>
-      </div>
-
-      <div class="panel">
-        <label for="window">Agregasi</label>
-        <select id="window">
-          <option value="1s">1s</option>
-          <option value="2s" selected>2s</option>
-          <option value="5s">5s</option>
-          <option value="10s">10s</option>
-        </select>
-      </div>
-
-      <div class="panel">
-        <button id="refreshBtn">Refresh</button>
+        <label>&nbsp;</label>
+        <button id="refreshBtn">Refresh Data</button>
       </div>
     </div>
 
-    <div class="status">
-      <span class="dot" id="dot"></span>
+    <div class="status-row">
+      <span class="dot" id="statusDot"></span>
       <span id="statusText">Menunggu data...</span>
     </div>
 
-    <div class="chart">
-      <canvas id="chartCanvas"></canvas>
+    <div class="grid grid-3" style="margin-bottom:14px">
+      <div class="panel status-card">
+        <div class="section-title">Status Postur Saat Ini</div>
+        <div class="posture-label" id="currentPosture">-</div>
+        <span class="badge" id="postureBadge">-</span>
+      </div>
+      <div class="panel status-card">
+        <div class="section-title">Durasi Postur Buruk</div>
+        <div class="metric-value" id="badStreak">0 detik</div>
+        <div class="metric-label">Streak saat ini</div>
+      </div>
+      <div class="panel">
+        <div class="section-title">Ringkasan Hari Ini</div>
+        <div class="summary-grid">
+          <div class="summary-item">
+            <div class="metric-label">Postur Buruk</div>
+            <div class="metric-value" id="badPct" style="font-size:1.3rem">-</div>
+          </div>
+          <div class="summary-item">
+            <div class="metric-label">Durasi Buruk</div>
+            <div class="metric-value" id="badDur" style="font-size:1.3rem">-</div>
+          </div>
+          <div class="summary-item">
+            <div class="metric-label">Dominan</div>
+            <div class="metric-value" id="dominant" style="font-size:1rem">-</div>
+          </div>
+          <div class="summary-item">
+            <div class="metric-label">Total Sampel</div>
+            <div class="metric-value" id="totalSamples" style="font-size:1.3rem">-</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid grid-2" style="margin-bottom:14px">
+      <div class="panel chart-panel">
+        <div class="section-title">Timeline Postur</div>
+        <canvas id="timelineChart"></canvas>
+      </div>
+      <div class="panel chart-panel">
+        <div class="section-title">Distribusi Postur Hari Ini</div>
+        <canvas id="distributionChart"></canvas>
+      </div>
+    </div>
+
+    <div class="debug-section">
+      <h2 style="font-size:1.1rem;color:var(--muted)">Panel Debug</h2>
+      <div class="grid grid-2">
+        <div class="panel chart-panel">
+          <div class="section-title">Roll & Pitch</div>
+          <canvas id="anglesChart"></canvas>
+        </div>
+        <div class="panel">
+          <div class="section-title">Data Sensor Mentah (roll/pitch)</div>
+          <div class="grid" style="grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
+            <div>
+              <label for="sensorField">Metric</label>
+              <select id="sensorField">
+                <option value="roll">roll</option>
+                <option value="pitch">pitch</option>
+              </select>
+            </div>
+            <div>
+              <label for="sensorRange">Range</label>
+              <select id="sensorRange">
+                <option value="15m">15 menit</option>
+                <option value="1h" selected>1 jam</option>
+                <option value="6h">6 jam</option>
+              </select>
+            </div>
+          </div>
+          <div class="chart-panel">
+            <canvas id="sensorChart"></canvas>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 
   <script>
-    const field = document.getElementById('field');
-    const range = document.getElementById('range');
-    const windowSize = document.getElementById('window');
-    const refreshBtn = document.getElementById('refreshBtn');
-    const statusText = document.getElementById('statusText');
-    const dot = document.getElementById('dot');
+    const postureLabels = {
+      duduk_bungkuk: 'Duduk Bungkuk',
+      duduk_tegak: 'Duduk Tegak'
+    };
 
-    const ctx = document.getElementById('chartCanvas').getContext('2d');
-    const chart = new Chart(ctx, {
-      type: 'line',
-      data: {
-        labels: [],
-        datasets: [{
-          label: 'Sensor Value',
-          data: [],
-          borderWidth: 2,
-          borderColor: '#2dd4bf',
-          pointRadius: 0,
-          fill: true,
-          backgroundColor: 'rgba(45, 212, 191, 0.14)',
-          tension: 0.25
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        scales: {
-          x: {
-            ticks: { color: '#b5c8d8', maxTicksLimit: 10 },
-            grid: { color: 'rgba(255, 255, 255, 0.06)' }
-          },
-          y: {
-            ticks: { color: '#b5c8d8' },
-            grid: { color: 'rgba(255, 255, 255, 0.08)' }
-          }
-        },
-        plugins: {
-          legend: {
-            labels: { color: '#edf6ff' }
-          }
-        }
+    const postureColors = {
+      duduk_bungkuk: '#f97316',
+      duduk_tegak: '#2dd4bf'
+    };
+
+    const deviceSelect = document.getElementById('deviceSelect');
+    const refreshBtn = document.getElementById('refreshBtn');
+    const statusDot = document.getElementById('statusDot');
+    const statusText = document.getElementById('statusText');
+    const alertBanner = document.getElementById('alertBanner');
+    const currentPosture = document.getElementById('currentPosture');
+    const postureBadge = document.getElementById('postureBadge');
+    const badStreak = document.getElementById('badStreak');
+    const badPct = document.getElementById('badPct');
+    const badDur = document.getElementById('badDur');
+    const dominant = document.getElementById('dominant');
+    const totalSamples = document.getElementById('totalSamples');
+
+    const chartDefaults = {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { labels: { color: '#edf6ff' } } },
+      scales: {
+        x: { ticks: { color: '#b5c8d8', maxTicksLimit: 8 }, grid: { color: 'rgba(255,255,255,0.06)' } },
+        y: { ticks: { color: '#b5c8d8' }, grid: { color: 'rgba(255,255,255,0.08)' } }
       }
+    };
+
+    const timelineChart = new Chart(document.getElementById('timelineChart'), {
+      type: 'line',
+      data: { labels: [], datasets: [{
+        label: 'Postur Buruk (1=ya, 0=tidak)',
+        data: [],
+        borderColor: '#ef4444',
+        backgroundColor: 'rgba(239,68,68,0.15)',
+        fill: true,
+        pointRadius: 0,
+        tension: 0.2
+      }]},
+      options: { ...chartDefaults, scales: { ...chartDefaults.scales, y: { ...chartDefaults.scales.y, min: 0, max: 1, ticks: { ...chartDefaults.scales.y.ticks, stepSize: 1 } } } }
     });
 
-    async function loadData() {
-      const params = new URLSearchParams({
-        field: field.value,
-        range: range.value,
-        window: windowSize.value
-      });
+    const distributionChart = new Chart(document.getElementById('distributionChart'), {
+      type: 'doughnut',
+      data: { labels: [], datasets: [{ data: [], backgroundColor: [] }] },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { color: '#edf6ff' } } } }
+    });
 
+    const anglesChart = new Chart(document.getElementById('anglesChart'), {
+      type: 'line',
+      data: { labels: [], datasets: [
+        { label: 'roll', data: [], borderColor: '#2dd4bf', pointRadius: 0, tension: 0.2 },
+        { label: 'pitch', data: [], borderColor: '#f59e0b', pointRadius: 0, tension: 0.2 }
+      ]},
+      options: chartDefaults
+    });
+
+    const sensorChart = new Chart(document.getElementById('sensorChart'), {
+      type: 'line',
+      data: { labels: [], datasets: [{ label: 'Sensor', data: [], borderColor: '#818cf8', pointRadius: 0, fill: true, backgroundColor: 'rgba(129,140,248,0.12)', tension: 0.2 }] },
+      options: chartDefaults
+    });
+
+    function formatPosture(p) { return postureLabels[p] || p || '-'; }
+    function formatDuration(sec) {
+      if (sec == null || isNaN(sec)) return '-';
+      sec = Math.round(sec);
+      if (sec < 60) return sec + ' detik';
+      const m = Math.floor(sec / 60);
+      const s = sec % 60;
+      return m + ' m ' + s + ' d';
+    }
+
+    async function loadDevices() {
+      const res = await fetch('/api/devices');
+      const devices = await res.json();
+      const current = deviceSelect.value;
+      deviceSelect.innerHTML = devices.length
+        ? devices.map(d => `<option value="${d}">${d}</option>`).join('')
+        : '<option value="">Tidak ada device</option>';
+      if (current && devices.includes(current)) deviceSelect.value = current;
+    }
+
+    async function loadCurrent(deviceId) {
+      const res = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/current`);
+      if (!res.ok) throw new Error('current status unavailable');
+      const data = await res.json();
+
+      currentPosture.textContent = formatPosture(data.posture);
+      postureBadge.textContent = data.is_bad_posture ? 'Buruk' : 'Baik';
+      postureBadge.className = 'badge ' + (data.is_bad_posture ? 'bad' : 'good');
+      badStreak.textContent = formatDuration(data.bad_streak_sec);
+      alertBanner.classList.toggle('show', !!data.alert_active);
+      return data;
+    }
+
+    async function loadSummary(deviceId) {
+      const res = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/summary?range=today`);
+      if (!res.ok) return;
+      const data = await res.json();
+      badPct.textContent = (data.bad_posture_pct ?? 0).toFixed(1) + '%';
+      badDur.textContent = formatDuration(data.bad_duration_sec);
+      dominant.textContent = formatPosture(data.dominant_posture);
+      totalSamples.textContent = data.total_samples ?? 0;
+    }
+
+    async function loadTimeline(deviceId) {
+      const res = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/timeline?range=today`);
+      if (!res.ok) return;
+      const data = await res.json();
+      const labels = data.map(p => new Date(p.time).toLocaleTimeString());
+      const values = data.map(p => p.is_bad_posture ? 1 : 0);
+      timelineChart.data.labels = labels;
+      timelineChart.data.datasets[0].data = values;
+      timelineChart.update();
+    }
+
+    async function loadDistribution(deviceId) {
+      const res = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/distribution?range=today`);
+      if (!res.ok) return;
+      const payload = await res.json();
+      const data = payload.data || [];
+      distributionChart.data.labels = data.map(d => formatPosture(d.posture));
+      distributionChart.data.datasets[0].data = data.map(d => d.count);
+      distributionChart.data.datasets[0].backgroundColor = data.map(d => postureColors[d.posture] || '#888');
+      distributionChart.update();
+    }
+
+    async function loadAngles(deviceId) {
+      const res = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/angles?range=1h`);
+      if (!res.ok) return;
+      const payload = await res.json();
+      const data = payload.data || [];
+      const labels = data.map(p => new Date(p.time).toLocaleTimeString());
+      anglesChart.data.labels = labels;
+      anglesChart.data.datasets[0].data = data.map(p => p.roll);
+      anglesChart.data.datasets[1].data = data.map(p => p.pitch);
+      anglesChart.update();
+    }
+
+    async function loadSensorSeries() {
+      const field = document.getElementById('sensorField').value;
+      const range = document.getElementById('sensorRange').value;
+      const res = await fetch(`/api/series?field=${field}&range=${range}&window=2s`);
+      if (!res.ok) return;
+      const payload = await res.json();
+      const labels = (payload.data || []).map(p => new Date(p.time).toLocaleTimeString());
+      const values = (payload.data || []).map(p => p.value);
+      sensorChart.data.labels = labels;
+      sensorChart.data.datasets[0].label = field;
+      sensorChart.data.datasets[0].data = values;
+      sensorChart.update();
+    }
+
+    async function refreshAll() {
+      const deviceId = deviceSelect.value;
+      if (!deviceId) {
+        statusText.textContent = 'Tidak ada device terpilih';
+        statusDot.className = 'dot';
+        return;
+      }
       try {
-        statusText.textContent = 'Mengambil data dari InfluxDB...';
-        dot.className = 'dot';
-
-        const res = await fetch(`/api/series?${params.toString()}`);
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-
-        const payload = await res.json();
-        const labels = payload.data.map(p => new Date(p.time).toLocaleTimeString());
-        const values = payload.data.map(p => p.value);
-
-        chart.data.labels = labels;
-        chart.data.datasets[0].label = `${payload.field} (${payload.range})`;
-        chart.data.datasets[0].data = values;
-        chart.update();
-
-        statusText.textContent = `Menampilkan ${values.length} titik data (${payload.field})`;
-        dot.className = values.length > 0 ? 'dot ok' : 'dot';
+        statusText.textContent = 'Memuat data...';
+        statusDot.className = 'dot';
+        await Promise.all([
+          loadCurrent(deviceId),
+          loadSummary(deviceId),
+          loadTimeline(deviceId),
+          loadDistribution(deviceId),
+          loadAngles(deviceId),
+          loadSensorSeries()
+        ]);
+        statusText.textContent = 'Data terbaru dimuat — ' + new Date().toLocaleTimeString();
+        statusDot.className = 'dot ok';
       } catch (err) {
-        statusText.textContent = 'Gagal mengambil data: ' + err.message;
-        dot.className = 'dot err';
+        statusText.textContent = 'Gagal memuat: ' + err.message;
+        statusDot.className = 'dot err';
       }
     }
 
-    field.addEventListener('change', loadData);
-    range.addEventListener('change', loadData);
-    windowSize.addEventListener('change', loadData);
-    refreshBtn.addEventListener('click', loadData);
+    refreshBtn.addEventListener('click', refreshAll);
+    deviceSelect.addEventListener('change', refreshAll);
+    document.getElementById('sensorField').addEventListener('change', loadSensorSeries);
+    document.getElementById('sensorRange').addEventListener('change', loadSensorSeries);
 
-    loadData();
-    setInterval(loadData, 5000);
+    (async () => {
+      await loadDevices();
+      await refreshAll();
+      setInterval(async () => {
+        await loadDevices();
+        await refreshAll();
+      }, 5000);
+    })();
   </script>
 </body>
 </html>

@@ -61,13 +61,16 @@ services:
     environment:
       - HTTP_ADDR=:3000
       - MQTT_BROKER=tcp://mosquitto:1883
-      - MQTT_TOPIC=sensors/mpu6050
+      - MQTT_SENSOR_TOPIC=sensors/mpu6050
       - MQTT_CLIENT_ID=analytics-service
+      - SENSOR_DEVICE_ID=${SENSOR_DEVICE_ID:-ESP32_MPU6050}
+      - POSTURE_BAD_ROLL_DEG=${POSTURE_BAD_ROLL_DEG:-20}
+      - POSTURE_BAD_PITCH_DEG=${POSTURE_BAD_PITCH_DEG:-20}
       - INFLUX_URL=http://influxdb:8086
       - INFLUX_TOKEN=${INFLUXDB_TOKEN:-change-me-to-secret-token}
       - INFLUX_ORG=${INFLUXDB_ORG:-my-org}
       - INFLUX_BUCKET=${INFLUXDB_BUCKET:-iot_data}
-      - INFLUX_MEASUREMENT=mpu6050
+      - INFLUX_MEASUREMENT=raw_mpu6050
     depends_on:
       mosquitto:
         condition: service_healthy

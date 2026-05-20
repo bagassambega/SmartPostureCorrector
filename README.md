@@ -254,7 +254,7 @@ Setelah konfigurasi selesai:
 3. **Data sensor dikirim ke MQTT topic** setiap 200ms dalam format JSON:
 
 ```json
-{"roll":2.45,"pitch":-1.23,"gx":0.20,"gy":-0.15,"gz":0.10}
+{"timestamp":123456,"roll":2.45,"pitch":-1.23}
 ```
 
 1. Pesan akan muncul di Serial Monitor:
@@ -287,9 +287,9 @@ mosquitto_sub -h 192.168.1.100 -t "sensors/mpu6050"
 Anda akan melihat output data sensor real-time:
 
 ```
-{"roll":2.45,"pitch":-1.23,"gx":0.20,"gy":-0.15,"gz":0.10}
-{"roll":2.48,"pitch":-1.20,"gx":0.22,"gy":-0.18,"gz":0.12}
-{"roll":15.67,"pitch":8.90,"gx":45.30,"gy":32.10,"gz":5.50}
+{"timestamp":123456,"roll":2.45,"pitch":-1.23}
+{"timestamp":123656,"roll":2.48,"pitch":-1.20}
+{"timestamp":123856,"roll":15.67,"pitch":8.90}
 ```
 
 ### Troubleshooting MQTT
@@ -319,8 +319,11 @@ Anda akan melihat output data sensor real-time:
 Proyek cloud ini sekarang menggunakan **satu service custom berbasis Golang** sebagai:
 
 1. **MQTT consumer** untuk menerima payload sensor dari topic `sensors/mpu6050`
-2. **InfluxDB writer** untuk menyimpan data sensor (`roll`, `pitch`, `gx`, `gy`, `gz`)
-3. **Backend API + Frontend dashboard** untuk membaca data dari InfluxDB dan menampilkan grafik analytics
+2. **Posture classifier** sederhana untuk mengubah `roll`/`pitch` menjadi status `duduk_tegak` atau `duduk_bungkuk`
+3. **InfluxDB writer** untuk menyimpan data sensor mentah (`roll`, `pitch`) dan event posture
+4. **Backend API + Frontend dashboard** untuk membaca data dari InfluxDB dan menampilkan grafik analytics
+
+Cloud hanya mengikuti payload dari `hardware/sensor/sensor.ino`. File `hardware/collect_dataset/collect_dataset.ino` tidak dipakai oleh pipeline cloud ini.
 
 `Node-RED` dan `Grafana` sudah dihapus dari `docker-compose`, sehingga pipeline cloud menjadi:
 
@@ -348,14 +351,18 @@ Buka browser ke:
 
 Fitur dashboard:
 
-1. Pilih metric (`roll`, `pitch`, `gx`, `gy`, `gz`)
-2. Pilih rentang waktu (`15m`, `1h`, `6h`, `24h`)
-3. Refresh otomatis tiap 5 detik
+1. Status postur real-time dari data `roll`/`pitch`
+2. Ringkasan postur buruk, timeline, distribusi, dan grafik `roll`/`pitch`
+3. Panel sensor mentah untuk metric `roll` dan `pitch`
+4. Refresh otomatis tiap 5 detik
 
 ### Endpoint API
 
 1. Health check: `GET /healthz`
-2. Data series: `GET /api/series?field=roll&range=1h&window=2s`
+2. Device list: `GET /api/devices`
+3. Current posture: `GET /api/devices/{device_id}/current`
+4. Summary: `GET /api/devices/{device_id}/summary?range=today`
+5. Data series mentah: `GET /api/series?field=roll&range=1h&window=2s`
 
 ---
 

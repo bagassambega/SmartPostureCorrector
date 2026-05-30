@@ -1,5 +1,6 @@
 #include <Wire.h>
 #include <WiFi.h>
+#include <Arduino.h>
 #include <PubSubClient.h>
 
 #define MPU6050_ADDR 0x68
@@ -64,6 +65,12 @@ float kecepatanRotasiY = 0;
 float kecepatanRotasiZ = 0;
 
 bool lastButtonState = HIGH;
+
+void bacaSensor();
+void publishData();
+void kalibrasiOrientasi();
+void kalibrasiGyro();
+void reconnectMQTT();
 
 void mqttCallback(char *topic, byte *payload, unsigned int length)
 {
@@ -161,7 +168,7 @@ void bacaSensor()
     Wire.write(ACCEL_XOUT_H);
     Wire.endTransmission(false);
 
-    Wire.requestFrom(MPU6050_ADDR, 14, true);
+    Wire.requestFrom((uint16_t)MPU6050_ADDR, (size_t)14, true);
 
     rawAccX =
         Wire.read() << 8 | Wire.read();

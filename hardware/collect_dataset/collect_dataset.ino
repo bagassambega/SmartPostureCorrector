@@ -19,6 +19,7 @@ const char *MQTT_SERVER = "10.198.127.51";
 const uint16_t MQTT_PORT = 1883;
 
 const char *MQTT_TOPIC = "sensors/posture";
+const char *MQTT_CALIB_TOPIC = "sensors/calibrate";
 
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
@@ -64,6 +65,33 @@ float kecepatanRotasiZ = 0;
 
 bool lastButtonState = HIGH;
 
+void mqttCallback(char *topic, byte *payload, unsigned int length)
+{
+    String message;
+
+    for (unsigned int i = 0; i < length; i++)
+    {
+        message += (char)payload[i];
+    }
+
+    Serial.print("MQTT Message [");
+    Serial.print(topic);
+    Serial.print("]: ");
+    Serial.println(message);
+
+    if (
+        strcmp(topic, MQTT_CALIB_TOPIC) == 0 &&
+        message == "CALIBRATE")
+    {
+        Serial.println("=================================");
+        Serial.println("Remote calibration requested");
+        Serial.println("=================================");
+
+        kalibrasiOrientasi();
+        kalibrasiGyro();
+    }
+}
+
 void setup()
 {
     Serial.begin(115200);
@@ -83,6 +111,7 @@ void setup()
     Serial.println("\nWiFi Connected");
 
     mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
+    mqttClient.setCallback(mqttCallback);
     mqttClient.setBufferSize(1024);
 
     Wire.beginTransmission(MPU6050_ADDR);
@@ -344,8 +373,28 @@ void reconnectMQTT()
                 (uint32_t)ESP.getEfuseMac(),
                 HEX);
 
-        mqttClient.connect(clientId.c_str());
+        if (mqttClient.connect(clientId.c_str()))
+        {
+            Serial.println("MQTT Connected");
 
-        delay(1000);
+            mqttClient.subscribe(
+                MQTT_CALIB_TOPIC);
+
+            Serial.print(
+                "Subscribed: ");
+
+            Serial.println(
+                MQTT_CALIB_TOPIC);
+        }
+        else
+        {
+            Serial.print(
+                "MQTT connect failed, state=");
+
+            Serial.println(
+                mqttClient.state());
+
+            delay(1000);
+        }
     }
 }

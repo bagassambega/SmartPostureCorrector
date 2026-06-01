@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	paho "github.com/eclipse/paho.mqtt.golang"
+
 	"analytics-service/aggregator"
 	"analytics-service/config"
 	"analytics-service/models"
@@ -20,11 +22,12 @@ type Server struct {
 	cfg        config.Config
 	store      *storage.Store
 	aggregator *aggregator.Aggregator
+	mqttClient paho.Client
 	staticFS   fs.FS
 }
 
-func NewServer(cfg config.Config, store *storage.Store, agg *aggregator.Aggregator, staticFS fs.FS) *Server {
-	return &Server{cfg: cfg, store: store, aggregator: agg, staticFS: staticFS}
+func NewServer(cfg config.Config, store *storage.Store, agg *aggregator.Aggregator, mqttClient paho.Client, staticFS fs.FS) *Server {
+	return &Server{cfg: cfg, store: store, aggregator: agg, mqttClient: mqttClient, staticFS: staticFS}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -36,6 +39,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/devices/{device_id}/timeline", s.deviceTimeline)
 	mux.HandleFunc("GET /api/devices/{device_id}/angles", s.deviceAngles)
 	mux.HandleFunc("GET /api/devices/{device_id}/distribution", s.deviceDistribution)
+	mux.HandleFunc("POST /api/devices/{device_id}/calibrate", s.deviceCalibrate)
 	mux.HandleFunc("GET /api/series", s.sensorSeries)
 	mux.Handle("/", http.FileServer(http.FS(s.staticFS)))
 	return loggingMiddleware(mux)
@@ -253,3 +257,28 @@ func writeJSON(w http.ResponseWriter, status int, payload interface{}) {
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
 }
+
+func (s *Server) deviceCalibrate(w http.ResponseWriter, r *http.Request) {
+	deviceID := r.PathValue("device_id")
+	if deviceID == "" {
+		writeJSON(w, http.StatusBadRequest, models.ErrorResponse{Error: "device_id is required"})
+		return
+	}
+
+	// Publish "CALIBRATE" message to "sensors/calibrate"
+	// QoS = 1 ensures delivery, Retained = false is extremely important to prevent double calibration loop on restart.
+	token := s.mqttClient.Publish("sensors/calibrate", 1, false, "CALIBRATE")
+	token.Wait()
+	if token.Error() != nil {
+		log.Printf("failed to publish calibration command to MQTT for device %s: %v", deviceID, token.Error())
+		writeJSON(w, http.StatusInternalServerError, models.ErrorResponse{Error: "failed to dispatch calibration command"})
+		return
+	}
+
+	log.Printf("Successfully published calibration command to MQTT for device %s", deviceID)
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status":    "calibration command sent",
+		"device_id": deviceID,
+	})
+}
+

@@ -50,7 +50,7 @@ func main() {
 		log.Fatalf("failed to load embedded web assets: %v", err)
 	}
 
-	srv := api.NewServer(cfg, store, agg, staticFS)
+	srv := api.NewServer(cfg, store, agg, mqttClient, staticFS)
 	httpSrv := &http.Server{
 		Addr:    cfg.HTTPAddr,
 		Handler: srv.Handler(),

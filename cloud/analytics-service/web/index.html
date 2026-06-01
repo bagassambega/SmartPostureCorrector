@@ -108,7 +108,7 @@
       Peringatan: Postur buruk terdeteksi lebih dari 30 detik. Perbaiki postur Anda!
     </div>
 
-    <div class="grid grid-2" style="margin-bottom:14px">
+    <div class="grid grid-3" style="margin-bottom:14px">
       <div class="panel">
         <label for="deviceSelect">Device</label>
         <select id="deviceSelect"><option value="">Memuat device...</option></select>
@@ -116,6 +116,10 @@
       <div class="panel">
         <label>&nbsp;</label>
         <button id="refreshBtn">Refresh Data</button>
+      </div>
+      <div class="panel">
+        <label>&nbsp;</label>
+        <button id="calibrateBtn" style="background: linear-gradient(110deg, var(--warn), var(--primary)); color: #03202a;">Kalibrasi Sensor</button>
       </div>
     </div>
 
@@ -393,6 +397,44 @@
     deviceSelect.addEventListener('change', refreshAll);
     document.getElementById('sensorField').addEventListener('change', loadSensorSeries);
     document.getElementById('sensorRange').addEventListener('change', loadSensorSeries);
+
+    const calibrateBtn = document.getElementById('calibrateBtn');
+    calibrateBtn.addEventListener('click', async () => {
+      const deviceId = deviceSelect.value;
+      if (!deviceId) {
+        alert('Silakan pilih device terlebih dahulu.');
+        return;
+      }
+
+      const confirmCalib = confirm(
+        `Apakah Anda yakin ingin mengkalibrasi ulang device "${deviceId}"?\n\n` +
+        `PERINGATAN:\n` +
+        `1. Pastikan sensor terpasang lurus dan diletakkan di tempat datar.\n` +
+        `2. Pengguna harus diam dan tidak bergerak selama proses berlangsung (sekitar 3-5 detik).\n` +
+        `3. Bergerak saat kalibrasi akan membuat pembacaan sensor sesudahnya tidak akurat.`
+      );
+      if (!confirmCalib) return;
+
+      try {
+        calibrateBtn.disabled = true;
+        calibrateBtn.textContent = 'Mengirim Perintah...';
+        const res = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/calibrate`, {
+          method: 'POST'
+        });
+
+        if (!res.ok) {
+          const errData = await res.json();
+          throw new Error(errData.error || 'Server error');
+        }
+
+        alert('Perintah kalibrasi berhasil dikirim! Silakan tunggu beberapa saat sampai sensor selesai terkalibrasi.');
+      } catch (err) {
+        alert('Gagal mengirim perintah kalibrasi: ' + err.message);
+      } finally {
+        calibrateBtn.disabled = false;
+        calibrateBtn.textContent = 'Kalibrasi Sensor';
+      }
+    });
 
     (async () => {
       await loadDevices();

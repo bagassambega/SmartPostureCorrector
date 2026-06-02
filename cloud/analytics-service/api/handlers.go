@@ -39,7 +39,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/devices/{device_id}/timeline", s.deviceTimeline)
 	mux.HandleFunc("GET /api/devices/{device_id}/angles", s.deviceAngles)
 	mux.HandleFunc("GET /api/devices/{device_id}/distribution", s.deviceDistribution)
-	mux.HandleFunc("POST /api/devices/{device_id}/calibrate", s.deviceCalibrate)
+	mux.HandleFunc("POST /api/calibrate", s.calibrate)
 	mux.HandleFunc("GET /api/series", s.sensorSeries)
 	mux.Handle("/", http.FileServer(http.FS(s.staticFS)))
 	return loggingMiddleware(mux)
@@ -258,27 +258,20 @@ func writeJSON(w http.ResponseWriter, status int, payload interface{}) {
 	_ = json.NewEncoder(w).Encode(payload)
 }
 
-func (s *Server) deviceCalibrate(w http.ResponseWriter, r *http.Request) {
-	deviceID := r.PathValue("device_id")
-	if deviceID == "" {
-		writeJSON(w, http.StatusBadRequest, models.ErrorResponse{Error: "device_id is required"})
-		return
-	}
-
-	// Publish "CALIBRATE" message to "sensors/calibrate"
+func (s *Server) calibrate(w http.ResponseWriter, r *http.Request) {
+	// Publish "CALIBRATE" message to "sensors/calibrate" with no device-specific topic.
 	// QoS = 1 ensures delivery, Retained = false is extremely important to prevent double calibration loop on restart.
 	token := s.mqttClient.Publish("sensors/calibrate", 1, false, "CALIBRATE")
 	token.Wait()
 	if token.Error() != nil {
-		log.Printf("failed to publish calibration command to MQTT for device %s: %v", deviceID, token.Error())
+		log.Printf("failed to publish calibration command to MQTT: %v", token.Error())
 		writeJSON(w, http.StatusInternalServerError, models.ErrorResponse{Error: "failed to dispatch calibration command"})
 		return
 	}
 
-	log.Printf("Successfully published calibration command to MQTT for device %s", deviceID)
+	log.Printf("Successfully published calibration command to MQTT")
 	writeJSON(w, http.StatusOK, map[string]string{
-		"status":    "calibration command sent",
-		"device_id": deviceID,
+		"status": "calibration command sent",
 	})
 }
 

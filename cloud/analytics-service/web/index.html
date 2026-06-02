@@ -110,8 +110,8 @@
 
     <div class="grid grid-3" style="margin-bottom:14px">
       <div class="panel">
-        <label for="deviceSelect">Device</label>
-        <select id="deviceSelect"><option value="">Memuat device...</option></select>
+        <label>Device Aktif</label>
+        <div id="activeDevice" style="font-weight:700; padding:9px 10px; border:1px solid rgba(255,255,255,0.22); border-radius:10px; background:rgba(0,0,0,0.25);">Menunggu device…</div>
       </div>
       <div class="panel">
         <label>&nbsp;</label>
@@ -218,7 +218,8 @@
       duduk_tegak: '#2dd4bf'
     };
 
-    const deviceSelect = document.getElementById('deviceSelect');
+    const activeDeviceEl = document.getElementById('activeDevice');
+    let activeDeviceId = '';
     const refreshBtn = document.getElementById('refreshBtn');
     const statusDot = document.getElementById('statusDot');
     const statusText = document.getElementById('statusText');
@@ -289,11 +290,14 @@
     async function loadDevices() {
       const res = await fetch('/api/devices');
       const devices = await res.json();
-      const current = deviceSelect.value;
-      deviceSelect.innerHTML = devices.length
-        ? devices.map(d => `<option value="${d}">${d}</option>`).join('')
-        : '<option value="">Tidak ada device</option>';
-      if (current && devices.includes(current)) deviceSelect.value = current;
+      if (!devices.length) {
+        activeDeviceEl.textContent = 'Menunggu device…';
+        return;
+      }
+      if (!activeDeviceId || !devices.includes(activeDeviceId)) {
+        activeDeviceId = devices[0];
+      }
+      activeDeviceEl.textContent = activeDeviceId;
     }
 
     async function loadCurrent(deviceId) {
@@ -368,12 +372,12 @@
     }
 
     async function refreshAll() {
-      const deviceId = deviceSelect.value;
-      if (!deviceId) {
-        statusText.textContent = 'Tidak ada device terpilih';
+      if (!activeDeviceId) {
+        statusText.textContent = 'Menunggu data dari device…';
         statusDot.className = 'dot';
         return;
       }
+      const deviceId = activeDeviceId;
       try {
         statusText.textContent = 'Memuat data...';
         statusDot.className = 'dot';
@@ -394,20 +398,13 @@
     }
 
     refreshBtn.addEventListener('click', refreshAll);
-    deviceSelect.addEventListener('change', refreshAll);
     document.getElementById('sensorField').addEventListener('change', loadSensorSeries);
     document.getElementById('sensorRange').addEventListener('change', loadSensorSeries);
 
     const calibrateBtn = document.getElementById('calibrateBtn');
     calibrateBtn.addEventListener('click', async () => {
-      const deviceId = deviceSelect.value;
-      if (!deviceId) {
-        alert('Silakan pilih device terlebih dahulu.');
-        return;
-      }
-
       const confirmCalib = confirm(
-        `Apakah Anda yakin ingin mengkalibrasi ulang device "${deviceId}"?\n\n` +
+        `Apakah Anda yakin ingin mengkalibrasi ulang sensor?\n\n` +
         `PERINGATAN:\n` +
         `1. Pastikan sensor terpasang lurus dan diletakkan di tempat datar.\n` +
         `2. Pengguna harus diam dan tidak bergerak selama proses berlangsung (sekitar 3-5 detik).\n` +
@@ -418,7 +415,7 @@
       try {
         calibrateBtn.disabled = true;
         calibrateBtn.textContent = 'Mengirim Perintah...';
-        const res = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/calibrate`, {
+        const res = await fetch('/api/calibrate', {
           method: 'POST'
         });
 

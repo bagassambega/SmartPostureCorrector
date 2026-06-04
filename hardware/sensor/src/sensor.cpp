@@ -1,373 +1,500 @@
+// ============================================================
+// sensor.cpp  – ESP32 Posture Detection with Edge AI (MPU6050)
+//
+// Publishes every PUBLISH_INTERVAL ms to MQTT:
+//   { timestamp, roll, pitch, class }
+//
+// The Random Forest model (model_rf.h) classifies posture
+// using 11 features derived from the MPU6050 raw sensor data,
+// matching the feature vector produced by collect_dataset.cpp.
+// ============================================================
+
 #include <Wire.h>
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <Arduino.h>
 
-// Print specs
+// ESP32 system info headers
 #include "esp_system.h"
 #include "esp_spi_flash.h"
 
-// Alamat I2C MPU6050 (0x68 jika AD0 ke GND)
+// Eloquent ML Random Forest model – split across 15 translation units
+// to avoid the Xtensa LX6 l32r 256KB literal pool limit.
+// See split_rf_model.py for how this was generated.
+#include "model_rf_split.h"
+
+// ============================================================
+// TIMING
+// ============================================================
+
+// Interval antara setiap pembacaan sensor, prediksi, dan publish (ms)
+// Diganti dari 200ms (Arduino asal) ke 5000ms sesuai requirement baru
+#define PUBLISH_INTERVAL 5000UL
+
+// ============================================================
+// HARDWARE PINS & I2C ADDRESS
+// ============================================================
+
+// Alamat I2C default MPU6050 (pin AD0 ke GND)
 #define MPU6050_ADDR 0x68
 
-// Register MPU6050
-#define PWR_MGMT_1 0x6B
-#define ACCEL_XOUT_H 0x3B
-#define GYRO_XOUT_H 0x43
+// Register MPU6050 yang diperlukan
+#define PWR_MGMT_1   0x6B   // Power management – tulis 0x00 untuk bangun dari sleep
+#define ACCEL_XOUT_H 0x3B   // Register pertama blok data accelerometer
+#define GYRO_XOUT_H  0x43   // Register pertama blok data gyroscope (tidak dipakai langsung, baca burst dari ACCEL_XOUT_H)
 
-// Push button
+// Tombol push untuk re-kalibrasi manual
 #define CALIB_BUTTON_PIN 14
 
-// SDA dan SCL sensor MPU6050
+// Pin I2C kustom (default ESP32: SDA=21, SCL=22)
 #define SDA_PIN 21
 #define SCL_PIN 22
 
-// Variabel untuk menyimpan offset gyro (nilai error rata-rata gyro saat diam)
-// Nilai ini dihitung dalam fungsi kalibrasiGyro() dan digunakan untuk menyesuaikan pembacaan gyro agar akurat
-float gyroOffsetX = 0, gyroOffsetY = 0, gyroOffsetZ = 0;
+// ============================================================
+// WIFI & MQTT CONFIGURATION
+// ============================================================
 
-// Variabel untuk menyimpan data mentah accelerometer dan gyroscope dari register MPU6050
-// Diperbarui setiap pemanggilan fungsi bacaSensorRaw()
-int16_t accX, accY, accZ;
-int16_t gyroX, gyroY, gyroZ;
-
-// Variabel untuk menyimpan nilai kalibrasi (offset) roll dan pitch
-// Digunakan dengan mengurangi pembacaan raw dengan offset untuk mendapat sudut kemiringan relatif (titik 0 baru)
-float rollOffset = 0;
-float pitchOffset = 0;
-
-// Variabel untuk menyimpan sudut roll (sumbu X) dan pitch (sumbu Y) asli yang didapat melalui fungsi arctan
-float rawRoll = 0;
-float rawPitch = 0;
-
-// Variabel untuk menyimpan catatan waktu mikrodetik terakhir (opsional untuk perhitungan integral yaw timer)
-unsigned long lastTime = 0;
-
-// --- MQTT & WiFi configuration (edit these) ---
-// Variabel penyimpan SSID dan kata sandi WiFi agar ESP32 bisa connect ke router
 const char *WIFI_SSID = "Jenong Smart";
 const char *WIFI_PASS = "jenong21";
 
-// Server broker MQTT dan Port (alamat perangkat sentral untuk ESP32 mengirim data)
-const char *MQTT_SERVER = "192.168.1.10"; // ganti ke alamat broker Anda
+const char *MQTT_SERVER = "192.168.1.10"; // Ganti ke alamat broker Anda
 const uint16_t MQTT_PORT = 1883;
 
-// Username dan Password untuk autentikasi keamanan MQTT (jika ada)
-const char *MQTT_USER = ""; // isi jika broker perlu auth
-const char *MQTT_PASS = ""; // isi jika broker perlu auth
+// Username/password MQTT – kosongkan jika broker tidak butuh auth
+const char *MQTT_USER = "";
+const char *MQTT_PASS = "";
 
-// Topik pub/sub MQTT tempat ESP32 akan melemparkan parameter sudut (roll, pitch)
+// Topik MQTT tempat ESP32 mempublikasikan data orientasi + prediksi kelas
 const char *MQTT_TOPIC = "sensors/mpu6050";
 
-// Interface untuk WiFi klien dan modul PubSubClient untuk mengurus koneksi MQTT
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
 
-// Variabel untuk waktu (dalam ms) terakhir kali sensor mempublikasikan data MQTT
-// Digunakan dalam loop() untuk mekanisme non-blocking delay setiap interval tertentu
+// ============================================================
+// MODEL INFERENCE OBJECT
+// ============================================================
+
+// Instansiasi kelas Random Forest dari namespace Eloquent::ML::Port
+// Model di-include sebagai header-only, tidak membutuhkan library external
+Eloquent::ML::Port::RandomForest classifier;
+
+// ============================================================
+// RAW SENSOR VALUES (int16_t = 16-bit signed, sesuai register MPU6050)
+// ============================================================
+
+// Nilai mentah accelerometer dan gyroscope langsung dari register MPU6050
+// Digunakan baik untuk kalkulasi sudut maupun sebagai fitur model (x[0]–x[5])
+int16_t rawAccX, rawAccY, rawAccZ;
+int16_t rawGyroX, rawGyroY, rawGyroZ;
+
+// ============================================================
+// TILT / KEMIRINGAN (dalam derajat)
+// ============================================================
+
+// Sudut mentah yang dihitung dari atan2 accelerometer
+float rawKemiringanX = 0.0f;  // Roll mentah (°)
+float rawKemiringanY = 0.0f;  // Pitch mentah (°)
+
+// Nilai offset orientasi saat tombol kalibrasi ditekan
+// Digunakan untuk menetapkan "titik nol" posisi referensi
+float offsetKemiringanX = 0.0f;
+float offsetKemiringanY = 0.0f;
+
+// Sudut akhir relatif terhadap posisi kalibrasi
+float kemiringanX = 0.0f;  // Roll (°) → x[6] pada model
+float kemiringanY = 0.0f;  // Pitch (°) → x[7] pada model
+
+// ============================================================
+// GYRO OFFSET (bias error gyro saat diam)
+// ============================================================
+
+// Rata-rata pembacaan gyro saat sensor diam, dihitung dalam kalibrasiGyro()
+// Dikurangkan dari setiap pembacaan gyro untuk menghilangkan drift bias
+float gyroOffsetX = 0.0f;
+float gyroOffsetY = 0.0f;
+float gyroOffsetZ = 0.0f;
+
+// ============================================================
+// ANGULAR VELOCITY / KECEPATAN ROTASI (°/s)
+// ============================================================
+
+// Gyro yang sudah dikonversi ke derajat per detik (skala 131 untuk ±250°/s)
+// setelah dikurangi offset → x[8], x[9], x[10] pada model
+float kecepatanRotasiX = 0.0f;
+float kecepatanRotasiY = 0.0f;
+float kecepatanRotasiZ = 0.0f;
+
+// ============================================================
+// TIMING & DEBOUNCE STATE
+// ============================================================
+
+// Timestamp terakhir kali data dipublikasikan ke MQTT
 unsigned long lastPublish = 0;
-const unsigned long PUBLISH_INTERVAL = 200; // ms (interval publish ke MQTT)
 
-// Variabel status button sebelumnya untuk mendeteksi kapan state tombol berubah (Edge Detection)
+// State tombol kalibrasi sebelumnya – digunakan untuk deteksi rising edge
 bool lastButtonState = HIGH;
-// Variabel untuk debouncing hardware (mekanisme anti-bounce saklar mekanik) 
-unsigned long lastDebounceTime = 0;
-const unsigned long debounceDelay = 50;  // waktu tunda debounce 50ms
 
-// Fungsi setup() dijalankan satu kali saat perangkat pertama kali dinyalakan.
-// Bertugas untuk menginisialisasi Serial komunikasi, protokol I2C, menetapkan mode pin, 
-// membangun koneksi dengan WiFi dan server MQTT, serta mengkonfigurasi dan melakukan proses kalibrasi awal MPU6050.
+// Timestamp terakhir transisi tombol untuk debounce
+unsigned long lastDebounceTime = 0;
+
+// Waktu tunggu debounce (50ms cukup untuk menekan noise mekanikal)
+const unsigned long DEBOUNCE_DELAY = 50;
+
+// ============================================================
+// FORWARD DECLARATIONS
+// ============================================================
+
+void bacaSensor();
+void kalibrasiOrientasi();
+void kalibrasiGyro();
+void printESP32Specs();
+
+// ============================================================
+// SETUP
+// ============================================================
+
+// Dijalankan satu kali saat power-on: inisialisasi komunikasi serial,
+// I2C, WiFi, MQTT, MPU6050, lalu lakukan kalibrasi awal.
 void setup()
 {
-  Serial.begin(115200);
-  delay(2000);
-  printESP32Specs();
-  Wire.begin(SDA_PIN, SCL_PIN); // SDA=21, SCL=22
+    Serial.begin(115200);
+    delay(2000);
 
-  pinMode(CALIB_BUTTON_PIN, INPUT_PULLUP);
+    printESP32Specs();
 
-  // Inisialisasi WiFi
-  Serial.print("Menghubungkan ke WiFi");
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-  unsigned long wifiStart = millis();
-  while (WiFi.status() != WL_CONNECTED)
-  {
-    delay(500);
-    Serial.print(".");
-    if (millis() - wifiStart > 15000)
-      break; // timeout 15s
-  }
-  if (WiFi.status() == WL_CONNECTED)
-  {
-    Serial.println("\nWiFi terhubung");
-    Serial.print("IP: ");
-    Serial.println(WiFi.localIP());
-  }
-  else
-  {
-    Serial.println("\nGagal koneksi WiFi (lanjut tanpa WiFi)");
-  }
+    // Inisialisasi bus I2C dengan pin kustom (SDA=21, SCL=22)
+    Wire.begin(SDA_PIN, SCL_PIN);
 
-  // Setup MQTT server
-  mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
+    // Tombol kalibrasi menggunakan pull-up internal; LOW = ditekan
+    pinMode(CALIB_BUTTON_PIN, INPUT_PULLUP);
 
-  // Inisialisasi MPU6050
-  Wire.beginTransmission(MPU6050_ADDR);
-  Wire.write(PWR_MGMT_1);
-  Wire.write(0x00); // Bangun dari sleep mode
-  Wire.endTransmission();
+    // --- Koneksi WiFi ---
+    Serial.print("Menghubungkan ke WiFi");
+    WiFi.begin(WIFI_SSID, WIFI_PASS);
+    unsigned long wifiStart = millis();
+    while (WiFi.status() != WL_CONNECTED)
+    {
+        delay(500);
+        Serial.print(".");
+        if (millis() - wifiStart > 15000)
+            break; // timeout 15 detik, lanjut tanpa WiFi
+    }
 
-  // Konfigurasi accelerometer (±2g) dan gyro (±250°/s) menggunakan register konfigurasi
-  // (Opsional: set register 0x1C untuk accel, 0x1B untuk gyro, default sudah ±2g dan ±250°/s)
-  delay(100);
-  kalibrasiGyro();
+    if (WiFi.status() == WL_CONNECTED)
+    {
+        Serial.println("\nWiFi terhubung");
+        Serial.print("IP: ");
+        Serial.println(WiFi.localIP());
+    }
+    else
+    {
+        Serial.println("\nGagal koneksi WiFi (lanjut tanpa WiFi)");
+    }
 
-  lastTime = micros();
-  Serial.println("MPU6050 siap. Data: Roll(°), Pitch(°), GyroX(°/s), GyroY(°/s), GyroZ(°/s)");
+    // --- Konfigurasi MQTT broker ---
+    mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
+
+    // --- Inisialisasi MPU6050 ---
+    // Tulis 0x00 ke register PWR_MGMT_1 untuk membangunkan sensor dari sleep mode
+    Wire.beginTransmission(MPU6050_ADDR);
+    Wire.write(PWR_MGMT_1);
+    Wire.write(0x00);
+    Wire.endTransmission();
+
+    delay(100); // Beri waktu sensor stable setelah wake-up
+
+    // Kalibrasi awal: tentukan titik nol orientasi dan hitung bias gyro
+    kalibrasiOrientasi();
+    kalibrasiGyro();
+
+    Serial.println("Sistem siap. Publish setiap " + String(PUBLISH_INTERVAL) + "ms");
 }
 
-// Fungsi loop() berjalan terus-menerus selama alat aktif.
-// Bertujuan untuk membaca sensor, merespon input tombol untuk kalibrasi ulang orientasi,
-// menghitung logik derajat kemiringan secara matematis, mengurus koneksi ulang (reconnect) MQTT jika terputus,
-// dan mengirimkan payload data orientasi yang telah dikalkulasi tersebut ke server MQTT setiap PUBLISH_INTERVAL.
+// ============================================================
+// LOOP
+// ============================================================
+
+// Berjalan terus-menerus: baca sensor, deteksi tombol kalibrasi,
+// reconnect MQTT jika perlu, dan setiap PUBLISH_INTERVAL jalankan
+// inferensi model lalu kirim payload ke MQTT.
 void loop()
 {
-  bool currentButtonState = digitalRead(CALIB_BUTTON_PIN);
+    // --- Deteksi rising edge tombol kalibrasi (LOW→HIGH = dilepas) ---
+    bool currentButtonState = digitalRead(CALIB_BUTTON_PIN);
 
-  // Deteksi transisi HIGH -> LOW (button pressed)
-  if (lastButtonState == LOW && currentButtonState == HIGH)
-  {
-      if (millis() - lastDebounceTime > debounceDelay)
-      {
-          Serial.println();
-          Serial.println("=================================");
-          Serial.println("Button dilepas");
-          Serial.println("Memulai re-kalibrasi gyro...");
-          Serial.println("Pastikan sensor diam");
-          Serial.println("=================================");
-
-          delay(300);
-
-          rollOffset = rawRoll;
-          pitchOffset = rawPitch;
-          kalibrasiOrientasi();
-          kalibrasiGyro();
-
-          lastDebounceTime = millis();
-      }
-  }
-
-  lastButtonState = currentButtonState;
-
-  // Pastikan koneksi MQTT aktif
-  if (!mqttClient.connected())
-  {
-    // coba konek singkat tanpa blocking terlalu lama
-    static unsigned long lastMqttTry = 0;
-    if (millis() - lastMqttTry > 2000)
+    if (lastButtonState == LOW && currentButtonState == HIGH)
     {
-      lastMqttTry = millis();
-      if (WiFi.status() == WL_CONNECTED)
-      {
-        // build clientId dari MAC untuk unik
-        String clientId = "ESP32_MPU6050_";
-        clientId += String((uint64_t)ESP.getEfuseMac(), HEX);
-        Serial.print("Menghubungkan ke MQTT broker...");
-        if (mqttClient.connect(clientId.c_str(), MQTT_USER, MQTT_PASS))
+        if (millis() - lastDebounceTime > DEBOUNCE_DELAY)
         {
-          Serial.println(" terkoneksi");
+            Serial.println("=================================");
+            Serial.println("Button dilepas – re-kalibrasi...");
+            Serial.println("Pastikan sensor diam");
+            Serial.println("=================================");
+
+            delay(300);
+
+            kalibrasiOrientasi();
+            kalibrasiGyro();
+
+            lastDebounceTime = millis();
         }
-        else
-        {
-          Serial.print(" gagal, state=");
-          Serial.println(mqttClient.state());
-        }
-      }
     }
-  }
 
-  bacaSensorRaw();
+    lastButtonState = currentButtonState;
 
-  // Konversi nilai accelerometer ke g (skala 16384 untuk ±2g)
-  float ax = accX / 16384.0;
-  float ay = accY / 16384.0;
-  float az = accZ / 16384.0;
-
-  // Hitung roll (kemiringan sumbu X) dan pitch (kemiringan sumbu Y)
-  rawRoll = atan2(ay, az) * 180.0 / PI;
-  rawPitch = atan2(-ax, sqrt(ay * ay + az * az)) * 180.0 / PI;
-
-  float roll = rawRoll - rollOffset;
-  float pitch = rawPitch - pitchOffset;
-
-  // Konversi gyro ke derajat per detik (skala 131 untuk ±250°/s)
-  float gx = (gyroX - gyroOffsetX) / 131.0;
-  float gy = (gyroY - gyroOffsetY) / 131.0;
-  float gz = (gyroZ - gyroOffsetZ) / 131.0;
-
-  // Kirim data ke serial monitor
-  Serial.print("Roll: ");
-  Serial.print(roll, 2);
-  Serial.print("\tPitch: ");
-  Serial.print(pitch, 2);
-  Serial.print("\tGyro X: ");
-  Serial.print(gx, 2);
-  Serial.print("\tGyro Y: ");
-  Serial.print(gy, 2);
-  Serial.print("\tGyro Z: ");
-  Serial.println(gz, 2);
-
-  // Publish ke MQTT setiap PUBLISH_INTERVAL jika terhubung
-  if (millis() - lastPublish >= PUBLISH_INTERVAL)
-  {
-    lastPublish = millis();
-    if (mqttClient.connected())
+    // --- MQTT reconnect (non-blocking, coba setiap 2 detik) ---
+    if (!mqttClient.connected())
     {
-      char payload[128];
-      unsigned long timestamp = millis();
-      // snprintf(payload, sizeof(payload), "{\"roll\":%.2f,\"pitch\":%.2f,\"gx\":%.2f,\"gy\":%.2f,\"gz\":%.2f}", roll, pitch, gx, gy, gz);
-      snprintf(
-          payload,
-          sizeof(payload),
-          "{\"timestamp\":%lu,\"roll\":%.2f,\"pitch\":%.2f}",
-          timestamp,
-          roll,
-          pitch
-      );
-      boolean ok = mqttClient.publish(MQTT_TOPIC, payload);
-      if (!ok)
-        Serial.println("Gagal publish MQTT");
+        static unsigned long lastMqttTry = 0;
+        if (millis() - lastMqttTry > 2000)
+        {
+            lastMqttTry = millis();
+            if (WiFi.status() == WL_CONNECTED)
+            {
+                // Bangun clientId unik dari MAC address
+                String clientId = "ESP32_MPU6050_";
+                clientId += String((uint64_t)ESP.getEfuseMac(), HEX);
+
+                Serial.print("Menghubungkan ke MQTT broker...");
+                if (mqttClient.connect(clientId.c_str(), MQTT_USER, MQTT_PASS))
+                {
+                    Serial.println(" terkoneksi");
+                }
+                else
+                {
+                    Serial.print(" gagal, state=");
+                    Serial.println(mqttClient.state());
+                }
+            }
+        }
     }
-  }
 
-  mqttClient.loop();
+    // --- Baca sensor – update semua variabel global ---
+    bacaSensor();
 
-  delay(50); // baca setiap 50 ms
+    // --- Publish + inferensi setiap PUBLISH_INTERVAL ---
+    if (millis() - lastPublish >= PUBLISH_INTERVAL)
+    {
+        lastPublish = millis();
+
+        // --------------------------------------------------------
+        // Susun feature vector untuk model Random Forest
+        //
+        // Urutan ini HARUS sesuai dengan urutan kolom dataset
+        // yang digunakan saat training di Python. Diambil dari
+        // collect_dataset.cpp publishData():
+        //
+        //   x[0]  = rawAccX          (int16, raw accelerometer X)
+        //   x[1]  = rawAccY          (int16, raw accelerometer Y)
+        //   x[2]  = rawAccZ          (int16, raw accelerometer Z)
+        //   x[3]  = rawGyroX         (int16, raw gyroscope X)
+        //   x[4]  = rawGyroY         (int16, raw gyroscope Y)
+        //   x[5]  = rawGyroZ         (int16, raw gyroscope Z)
+        //   x[6]  = kemiringanX      (float, roll  relatif °)
+        //   x[7]  = kemiringanY      (float, pitch relatif °)
+        //   x[8]  = kecepatanRotasiX (float, gx °/s setelah offset)
+        //   x[9]  = kecepatanRotasiY (float, gy °/s setelah offset)
+        //   x[10] = kecepatanRotasiZ (float, gz °/s setelah offset)
+        // --------------------------------------------------------
+        float features[11];
+        features[0]  = (float)rawAccX;
+        features[1]  = (float)rawAccY;
+        features[2]  = (float)rawAccZ;
+        features[3]  = (float)rawGyroX;
+        features[4]  = (float)rawGyroY;
+        features[5]  = (float)rawGyroZ;
+        features[6]  = kemiringanX;
+        features[7]  = kemiringanY;
+        features[8]  = kecepatanRotasiX;
+        features[9]  = kecepatanRotasiY;
+        features[10] = kecepatanRotasiZ;
+
+        // Jalankan inferensi – predictLabel() memanggil predict() secara
+        // internal dan mengembalikan label kelas sebagai C-string ("0"–"3")
+        int predictedClass     = classifier.predict(features);
+        const char *classLabel = classifier.idxToLabel(predictedClass);
+
+        unsigned long timestamp = millis();
+
+        // Cetak ke serial monitor untuk debugging
+        Serial.print("Roll: ");        Serial.print(kemiringanX, 2);
+        Serial.print("\tPitch: ");     Serial.print(kemiringanY, 2);
+        Serial.print("\tClass: ");     Serial.println(classLabel);
+
+        // Kirim payload JSON ke MQTT jika terhubung
+        if (mqttClient.connected())
+        {
+            char payload[128];
+
+            // Payload mencakup timestamp, roll, pitch, dan kelas prediksi
+            // "class" adalah integer (0–3); classLabel adalah representasi string-nya
+            snprintf(
+                payload,
+                sizeof(payload),
+                "{\"timestamp\":%lu,\"roll\":%.2f,\"pitch\":%.2f,\"class\":%d}",
+                timestamp,
+                kemiringanX,
+                kemiringanY,
+                predictedClass
+            );
+
+            boolean ok = mqttClient.publish(MQTT_TOPIC, payload);
+            if (!ok)
+                Serial.println("Gagal publish MQTT");
+        }
+    }
+
+    mqttClient.loop();
+
+    // Polling singkat; bacaSensor() dipanggil tiap iterasi loop
+    // untuk menjaga data internal tetap segar (navigasi debounce dll.)
+    delay(10);
 }
 
-// Fungsi bacaSensorRaw() membaca 14 byte register berurutan dari MPU6050 lewat bus I2C.
-// Secara spesifik data ini memuat nilai accelerometer (X, Y, Z), sensor suhu (abaikan), dan gyroscope (X, Y, Z).
-// Dipanggil setiap siklus untuk memperbarui variabel mentah di atas sebelum dikonversi dan diolah (akselerasi dan rotasi).
-void bacaSensorRaw()
+// ============================================================
+// bacaSensor()
+//
+// Membaca 14 byte register berurutan dari MPU6050 melalui I2C
+// (6 byte accel + 2 byte suhu (dibuang) + 6 byte gyro = 14 byte).
+// Menghitung sudut kemiringan (roll/pitch) dan kecepatan rotasi
+// yang siap dipakai sebagai fitur model maupun dikirim ke MQTT.
+// ============================================================
+void bacaSensor()
 {
-  Wire.beginTransmission(MPU6050_ADDR);
-  Wire.write(ACCEL_XOUT_H);
-  Wire.endTransmission(false);
-  Wire.requestFrom(MPU6050_ADDR, 14, true); // 14 byte: accel (6) + suhu (2) + gyro (6)
+    Wire.beginTransmission(MPU6050_ADDR);
+    Wire.write(ACCEL_XOUT_H);
+    Wire.endTransmission(false); // repeated-start: pertahankan bus I2C aktif
 
-  accX = Wire.read() << 8 | Wire.read();
-  accY = Wire.read() << 8 | Wire.read();
-  accZ = Wire.read() << 8 | Wire.read();
-  Wire.read();
-  Wire.read(); // baca suhu (abaikan)
-  gyroX = Wire.read() << 8 | Wire.read();
-  gyroY = Wire.read() << 8 | Wire.read();
-  gyroZ = Wire.read() << 8 | Wire.read();
+    // requestFrom meminta 14 byte sekaligus (burst read)
+    Wire.requestFrom((uint16_t)MPU6050_ADDR, (size_t)14, true);
+
+    // Setiap register 16-bit disusun big-endian oleh MPU6050:
+    // byte tinggi datang dulu, geser 8 bit ke kiri lalu OR dengan byte rendah
+    rawAccX  = Wire.read() << 8 | Wire.read();
+    rawAccY  = Wire.read() << 8 | Wire.read();
+    rawAccZ  = Wire.read() << 8 | Wire.read();
+    Wire.read(); Wire.read(); // 2 byte suhu – tidak digunakan
+    rawGyroX = Wire.read() << 8 | Wire.read();
+    rawGyroY = Wire.read() << 8 | Wire.read();
+    rawGyroZ = Wire.read() << 8 | Wire.read();
+
+    // Konversi akselerometer ke satuan g (skala ±2g → LSB/g = 16384)
+    float ax = rawAccX / 16384.0f;
+    float ay = rawAccY / 16384.0f;
+    float az = rawAccZ / 16384.0f;
+
+    // Hitung sudut mentah menggunakan atan2 (tangent inverse 2-argumen)
+    // Roll  = rotasi terhadap sumbu X (kanan-kiri)
+    // Pitch = rotasi terhadap sumbu Y (maju-mundur)
+    rawKemiringanX = atan2(ay, az) * 180.0f / PI;
+    rawKemiringanY = atan2(-ax, sqrt(ay * ay + az * az)) * 180.0f / PI;
+
+    // Terapkan offset kalibrasi agar posisi referensi menjadi 0°
+    kemiringanX = rawKemiringanX - offsetKemiringanX;
+    kemiringanY = rawKemiringanY - offsetKemiringanY;
+
+    // Konversi gyro ke °/s (skala ±250°/s → LSB/(°/s) = 131)
+    // setelah dikurangi bias offset yang dihitung saat kalibrasi
+    kecepatanRotasiX = (rawGyroX - gyroOffsetX) / 131.0f;
+    kecepatanRotasiY = (rawGyroY - gyroOffsetY) / 131.0f;
+    kecepatanRotasiZ = (rawGyroZ - gyroOffsetZ) / 131.0f;
 }
 
-// Kalibrasi gyro dengan merata-rata 200 sampel saat sensor diam
+// ============================================================
+// kalibrasiGyro()
+//
+// Rata-rata 200 sampel gyro saat sensor diam untuk mengestimasi
+// bias (drift) gyro. Nilainya disimpan di gyroOffsetX/Y/Z dan
+// dikurangkan dari setiap pembacaan pada bacaSensor().
+// ============================================================
 void kalibrasiGyro()
 {
-    float sumX = 0;
-    float sumY = 0;
-    float sumZ = 0;
+    float sumX = 0, sumY = 0, sumZ = 0;
+    const int SAMPLE_COUNT = 200;
 
-    const int sample = 200;
+    Serial.println("Kalibrasi gyro... (pastikan sensor diam)");
 
-    Serial.println("Calibrating...");
-    
-    for (int i = 0; i < sample; i++)
+    for (int i = 0; i < SAMPLE_COUNT; i++)
     {
-        bacaSensorRaw();
+        bacaSensor();
 
-        sumX += gyroX;
-        sumY += gyroY;
-        sumZ += gyroZ;
+        sumX += rawGyroX;
+        sumY += rawGyroY;
+        sumZ += rawGyroZ;
 
         delay(5);
     }
 
-    gyroOffsetX = sumX / sample;
-    gyroOffsetY = sumY / sample;
-    gyroOffsetZ = sumZ / sample;
+    gyroOffsetX = sumX / SAMPLE_COUNT;
+    gyroOffsetY = sumY / SAMPLE_COUNT;
+    gyroOffsetZ = sumZ / SAMPLE_COUNT;
 
-    Serial.println("Calibration finished");
+    Serial.println("Kalibrasi gyro selesai");
+    Serial.print("Offset X: "); Serial.println(gyroOffsetX);
+    Serial.print("Offset Y: "); Serial.println(gyroOffsetY);
+    Serial.print("Offset Z: "); Serial.println(gyroOffsetZ);
 
-    Serial.print("Offset X: ");
-    Serial.println(gyroOffsetX);
-
-    Serial.print("Offset Y: ");
-    Serial.println(gyroOffsetY);
-
-    Serial.print("Offset Z: ");
-    Serial.println(gyroOffsetZ);
-
-    // Validasi sederhana
+    // Peringatan jika offset terlalu besar (sensor bergerak saat kalibrasi)
     if (abs(gyroOffsetX) > 1000 ||
         abs(gyroOffsetY) > 1000 ||
         abs(gyroOffsetZ) > 1000)
     {
-        Serial.println("WARNING: Calibration may have failed");
+        Serial.println("WARNING: Kalibrasi gyro mungkin gagal (sensor bergerak?)");
     }
 
     Serial.println("=================================");
 }
 
+// ============================================================
+// kalibrasiOrientasi()
+//
+// Membaca satu sampel sensor dan menyimpan sudut saat ini sebagai
+// offset orientasi. Setelah ini, kemiringanX/Y akan bernilai 0°
+// pada posisi sekarang (titik referensi baru).
+// ============================================================
 void kalibrasiOrientasi()
 {
-    bacaSensorRaw();
-
-    // Konversi accelerometer ke satuan g
-    float ax = accX / 16384.0;
-    float ay = accY / 16384.0;
-    float az = accZ / 16384.0;
+    bacaSensor();
 
     // Simpan posisi saat ini sebagai baseline baru
-    rollOffset = atan2(ay, az) * 180.0 / PI;
-
-    pitchOffset =
-        atan2(-ax, sqrt(ay * ay + az * az)) * 180.0 / PI;
+    offsetKemiringanX = rawKemiringanX;
+    offsetKemiringanY = rawKemiringanY;
 
     Serial.println("=================================");
-    Serial.println("Orientation calibrated");
-    
-    Serial.print("Roll offset: ");
-    Serial.println(rollOffset);
-
-    Serial.print("Pitch offset: ");
-    Serial.println(pitchOffset);
-
+    Serial.println("Orientasi dikalibrasi");
+    Serial.print("Roll offset: ");  Serial.println(offsetKemiringanX);
+    Serial.print("Pitch offset: "); Serial.println(offsetKemiringanY);
     Serial.println("=================================");
 }
 
+// ============================================================
+// printESP32Specs()
+//
+// Mencetak spesifikasi chip ESP32 ke serial monitor saat startup.
+// Berguna untuk verifikasi platform dan kapasitas memori yang tersedia.
+// ============================================================
 void printESP32Specs()
 {
     Serial.println("===== ESP32 SYSTEM INFO =====");
 
-    // Chip model
     Serial.print("Chip Model: ");
     Serial.println(ESP.getChipModel());
 
-    // Revision
     Serial.print("Chip Revision: ");
     Serial.println(ESP.getChipRevision());
 
-    // Core count
     Serial.print("CPU Cores: ");
     Serial.println(ESP.getChipCores());
 
-    // CPU frequency
     Serial.print("CPU Frequency (MHz): ");
     Serial.println(ESP.getCpuFreqMHz());
 
-    // Flash size
     Serial.print("Flash Size (bytes): ");
     Serial.println(ESP.getFlashChipSize());
 
     Serial.print("Flash Speed (Hz): ");
     Serial.println(ESP.getFlashChipSpeed());
 
-    // Heap memory
     Serial.print("Free Heap (bytes): ");
     Serial.println(ESP.getFreeHeap());
 
@@ -377,14 +504,11 @@ void printESP32Specs()
     Serial.print("Max Alloc Heap (bytes): ");
     Serial.println(ESP.getMaxAllocHeap());
 
-    // PSRAM
     if (psramFound())
     {
         Serial.println("PSRAM: FOUND");
-
         Serial.print("PSRAM Size (bytes): ");
         Serial.println(ESP.getPsramSize());
-
         Serial.print("Free PSRAM (bytes): ");
         Serial.println(ESP.getFreePsram());
     }

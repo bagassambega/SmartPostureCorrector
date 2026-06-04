@@ -13,10 +13,10 @@
 
 #define CALIB_BUTTON_PIN 14
 
-const char *WIFI_SSID = "Tab S9 FE";
-const char *WIFI_PASS = "1234haha";
+const char *WIFI_SSID = "A15";
+const char *WIFI_PASS = "saynotoclankers";
 
-const char *MQTT_SERVER = "10.198.127.51";
+const char *MQTT_SERVER = "10.29.236.51";
 const uint16_t MQTT_PORT = 1883;
 
 const char *MQTT_TOPIC = "sensors/posture";
@@ -355,6 +355,10 @@ void kalibrasiGyro()
         sumX += rawGyroX;
         sumY += rawGyroY;
         sumZ += rawGyroZ;
+
+        // Keep MQTT and WiFi alive during calibration
+        mqttClient.loop();
+        yield();
 
         delay(5);
     }

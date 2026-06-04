@@ -1,6 +1,7 @@
 #include <Wire.h>
 #include <WiFi.h>
 #include <PubSubClient.h>
+#include <Arduino.h>
 
 // Print specs
 #include "esp_system.h"

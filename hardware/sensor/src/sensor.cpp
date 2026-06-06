@@ -50,14 +50,23 @@
 #define SDA_PIN 21
 #define SCL_PIN 22
 
+// Motor vibrasi – D5 pada board ESP32 DevKit = GPIO5
+// Modul motor menggunakan transistor driver internal:
+//   HIGH → motor ON, LOW → motor OFF
+#define VIBRATION_MOTOR_PIN 5
+
+// Kelas prediksi yang memicu motor vibrasi sebagai haptic alert.
+// Ubah nilai ini jika kelas "postur buruk" berubah di model baru.
+#define VIBRATION_TRIGGER_CLASS 0
+
 // ============================================================
 // WIFI & MQTT CONFIGURATION
 // ============================================================
 
-const char *WIFI_SSID = "Jenong Smart";
-const char *WIFI_PASS = "jenong21";
+const char *WIFI_SSID = "A15";
+const char *WIFI_PASS = "saynotoclankers";
 
-const char *MQTT_SERVER = "192.168.1.10"; // Ganti ke alamat broker Anda
+const char *MQTT_SERVER = "10.29.236.51"; // Ganti ke alamat broker Anda
 const uint16_t MQTT_PORT = 1883;
 
 // Username/password MQTT – kosongkan jika broker tidak butuh auth
@@ -167,6 +176,11 @@ void setup()
 
     // Tombol kalibrasi menggunakan pull-up internal; LOW = ditekan
     pinMode(CALIB_BUTTON_PIN, INPUT_PULLUP);
+
+    // Motor vibrasi: output digital, default OFF (LOW) saat boot
+    // Penting: set LOW sebelum pinMode agar pin tidak menghasilkan glitch HIGH
+    digitalWrite(VIBRATION_MOTOR_PIN, LOW);
+    pinMode(VIBRATION_MOTOR_PIN, OUTPUT);
 
     // --- Koneksi WiFi ---
     Serial.print("Menghubungkan ke WiFi");
@@ -319,7 +333,23 @@ void loop()
         // Cetak ke serial monitor untuk debugging
         Serial.print("Roll: ");        Serial.print(kemiringanX, 2);
         Serial.print("\tPitch: ");     Serial.print(kemiringanY, 2);
-        Serial.print("\tClass: ");     Serial.println(classLabel);
+        Serial.print("\tClass: ");     Serial.print(classLabel);
+
+        // Kontrol motor vibrasi berdasarkan hasil prediksi kelas.
+        // Kelas 0 → postur yang memerlukan alert → motor ON.
+        // Kelas lain (1, 2, 3) → motor OFF.
+        // digitalWrite dilakukan setiap siklus PUBLISH_INTERVAL sehingga
+        // state motor selalu sinkron dengan prediksi terbaru.
+        if (predictedClass == VIBRATION_TRIGGER_CLASS)
+        {
+            digitalWrite(VIBRATION_MOTOR_PIN, HIGH);
+            Serial.println(" [MOTOR ON]");
+        }
+        else
+        {
+            digitalWrite(VIBRATION_MOTOR_PIN, LOW);
+            Serial.println(" [motor off]");
+        }
 
         // Kirim payload JSON ke MQTT jika terhubung
         if (mqttClient.connected())

@@ -105,7 +105,7 @@
     <p class="subtitle">Dashboard postur real-time dari ESP32 + MPU6050</p>
 
     <div id="alertBanner" class="alert-banner">
-      Peringatan: Postur buruk terdeteksi lebih dari 30 detik. Perbaiki postur Anda!
+      Peringatan: Postur buruk terdeteksi lebih dari 30 detik. Segera perbaiki postur duduk atau berdiri Anda!
     </div>
 
     <div class="grid grid-3" style="margin-bottom:14px">
@@ -208,14 +208,22 @@
   </div>
 
   <script>
+    // Mapping dari label string postur ke nama tampilan Indonesia.
+    // Harus mencakup semua 4 kelas output model RF.
     const postureLabels = {
-      duduk_bungkuk: 'Duduk Bungkuk',
-      duduk_tegak: 'Duduk Tegak'
+      berdiri_bungkuk: 'Berdiri Bungkuk',
+      berdiri_tegak:   'Berdiri Tegak',
+      duduk_bungkuk:   'Duduk Bungkuk',
+      duduk_tegak:     'Duduk Tegak'
     };
 
+    // Warna per postur untuk chart distribusi dan badge status.
+    // Merah  = postur buruk (bungkuk), Hijau/Teal = postur baik (tegak).
     const postureColors = {
-      duduk_bungkuk: '#f97316',
-      duduk_tegak: '#2dd4bf'
+      berdiri_bungkuk: '#ef4444',   // merah  – buruk
+      berdiri_tegak:   '#2dd4bf',   // teal   – baik
+      duduk_bungkuk:   '#f97316',   // oranye – buruk
+      duduk_tegak:     '#22c55e'    // hijau  – baik
     };
 
     const activeDeviceEl = document.getElementById('activeDevice');

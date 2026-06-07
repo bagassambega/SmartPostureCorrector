@@ -4,9 +4,9 @@
 // Publishes every PUBLISH_INTERVAL ms to MQTT:
 //   { timestamp, roll, pitch, class }
 //
-// The Random Forest model (model_rf.h) classifies posture
-// using 11 features derived from the MPU6050 raw sensor data,
-// matching the feature vector produced by collect_dataset.cpp.
+// Edge AI: emlearn-exported Random Forest (randomforest_model.h).
+// Model takes int16_t features[5]; see feature vector section
+// below for the exact mapping expected by the model.
 // ============================================================
 
 #include <Wire.h>
@@ -18,10 +18,11 @@
 #include "esp_system.h"
 #include "esp_spi_flash.h"
 
-// Eloquent ML Random Forest model – split across 15 translation units
-// to avoid the Xtensa LX6 l32r 256KB literal pool limit.
-// See split_rf_model.py for how this was generated.
-#include "model_rf_split.h"
+// emlearn Random Forest model.
+// Header lives at <repo_root>/model/randomforest_model.h and is added
+// to the compiler include path via -I../../model in platformio.ini.
+// No splitting, no code generation required – include and compile directly.
+#include "randomforest_model.h"
 
 // ============================================================
 // TIMING
@@ -55,9 +56,21 @@
 //   HIGH → motor ON, LOW → motor OFF
 #define VIBRATION_MOTOR_PIN 5
 
-// Kelas prediksi yang memicu motor vibrasi sebagai haptic alert.
-// Ubah nilai ini jika kelas "postur buruk" berubah di model baru.
-#define VIBRATION_TRIGGER_CLASS 0
+// Label encoding yang digunakan saat training model:
+//   0 = berdiri_bungkuk (buruk)  ← motor ON
+//   1 = berdiri_tegak   (baik)   ← motor OFF
+//   2 = duduk_bungkuk   (buruk)  ← motor ON
+//   3 = duduk_tegak     (baik)   ← motor OFF
+//
+// Macro ini mengevaluasi ke true untuk semua kelas postur buruk.
+// Digunakan di loop() untuk mengontrol pin motor vibrasi.
+#define IS_BAD_POSTURE(cls) ((cls) == 0 || (cls) == 2)
+
+// Jumlah fitur yang dimasukkan ke model saat ini.
+// Harus sesuai dengan jumlah kolom yang dipilih saat training.
+// Ubah nilai ini dan blok modelInput[] jika model baru menggunakan
+// jumlah fitur yang berbeda.
+#define MODEL_FEATURES_LENGTH 5
 
 // ============================================================
 // WIFI & MQTT CONFIGURATION
@@ -66,7 +79,7 @@
 const char *WIFI_SSID = "A15";
 const char *WIFI_PASS = "saynotoclankers";
 
-const char *MQTT_SERVER = "10.29.236.51"; // Ganti ke alamat broker Anda
+const char *MQTT_SERVER = "10.14.131.51"; // Ganti ke alamat broker Anda
 const uint16_t MQTT_PORT = 1883;
 
 // Username/password MQTT – kosongkan jika broker tidak butuh auth
@@ -79,13 +92,8 @@ const char *MQTT_TOPIC = "sensors/mpu6050";
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
 
-// ============================================================
-// MODEL INFERENCE OBJECT
-// ============================================================
-
-// Instansiasi kelas Random Forest dari namespace Eloquent::ML::Port
-// Model di-include sebagai header-only, tidak membutuhkan library external
-Eloquent::ML::Port::RandomForest classifier;
+// emlearn model is a set of plain C functions; no class instance needed.
+// Entry point: int32_t randomforest_model_predict(const int16_t*, int32_t)
 
 // ============================================================
 // RAW SENSOR VALUES (int16_t = 16-bit signed, sesuai register MPU6050)
@@ -292,55 +300,82 @@ void loop()
         lastPublish = millis();
 
         // --------------------------------------------------------
-        // Susun feature vector untuk model Random Forest
+        // [1/2] SENSOR DATA SNAPSHOT – 11 fitur lengkap
         //
-        // Urutan ini HARUS sesuai dengan urutan kolom dataset
-        // yang digunakan saat training di Python. Diambil dari
-        // collect_dataset.cpp publishData():
+        // Seluruh data sensor dikumpulkan dan disimpan di sini,
+        // terlepas dari berapa fitur yang digunakan model saat ini.
+        // Ini memastikan semua data tersedia jika model berikutnya
+        // memerlukan fitur yang berbeda – tidak ada perubahan pada
+        // logika pembacaan sensor yang diperlukan.
         //
-        //   x[0]  = rawAccX          (int16, raw accelerometer X)
-        //   x[1]  = rawAccY          (int16, raw accelerometer Y)
-        //   x[2]  = rawAccZ          (int16, raw accelerometer Z)
-        //   x[3]  = rawGyroX         (int16, raw gyroscope X)
-        //   x[4]  = rawGyroY         (int16, raw gyroscope Y)
-        //   x[5]  = rawGyroZ         (int16, raw gyroscope Z)
-        //   x[6]  = kemiringanX      (float, roll  relatif °)
-        //   x[7]  = kemiringanY      (float, pitch relatif °)
-        //   x[8]  = kecepatanRotasiX (float, gx °/s setelah offset)
-        //   x[9]  = kecepatanRotasiY (float, gy °/s setelah offset)
-        //   x[10] = kecepatanRotasiZ (float, gz °/s setelah offset)
+        //   sensorData[0]  = rawAccX          (int16, raw accel X)
+        //   sensorData[1]  = rawAccY          (int16, raw accel Y)
+        //   sensorData[2]  = rawAccZ          (int16, raw accel Z)
+        //   sensorData[3]  = rawGyroX         (int16, raw gyro X)
+        //   sensorData[4]  = rawGyroY         (int16, raw gyro Y)
+        //   sensorData[5]  = rawGyroZ         (int16, raw gyro Z)
+        //   sensorData[6]  = kemiringanX      (roll °, relatif)
+        //   sensorData[7]  = kemiringanY      (pitch °, relatif)
+        //   sensorData[8]  = kecepatanRotasiX (gx °/s setelah offset)
+        //   sensorData[9]  = kecepatanRotasiY (gy °/s setelah offset)
+        //   sensorData[10] = kecepatanRotasiZ (gz °/s setelah offset)
         // --------------------------------------------------------
-        float features[11];
-        features[0]  = (float)rawAccX;
-        features[1]  = (float)rawAccY;
-        features[2]  = (float)rawAccZ;
-        features[3]  = (float)rawGyroX;
-        features[4]  = (float)rawGyroY;
-        features[5]  = (float)rawGyroZ;
-        features[6]  = kemiringanX;
-        features[7]  = kemiringanY;
-        features[8]  = kecepatanRotasiX;
-        features[9]  = kecepatanRotasiY;
-        features[10] = kecepatanRotasiZ;
+        float sensorData[11];
+        sensorData[0]  = (float)rawAccX;
+        sensorData[1]  = (float)rawAccY;
+        sensorData[2]  = (float)rawAccZ;
+        sensorData[3]  = (float)rawGyroX;
+        sensorData[4]  = (float)rawGyroY;
+        sensorData[5]  = (float)rawGyroZ;
+        sensorData[6]  = kemiringanX;
+        sensorData[7]  = kemiringanY;
+        sensorData[8]  = kecepatanRotasiX;
+        sensorData[9]  = kecepatanRotasiY;
+        sensorData[10] = kecepatanRotasiZ;
 
-        // Jalankan inferensi – predictLabel() memanggil predict() secara
-        // internal dan mengembalikan label kelas sebagai C-string ("0"–"3")
-        int predictedClass     = classifier.predict(features);
-        const char *classLabel = classifier.idxToLabel(predictedClass);
+        // --------------------------------------------------------
+        // [2/2] MODEL INPUT VECTOR – subset dari sensorData
+        //
+        // emlearn mengharapkan const int16_t[MODEL_FEATURES_LENGTH].
+        // Hanya kolom yang dipakai saat training yang dimasukkan.
+        // Cast float → int16_t menggunakan truncation (bukan rounding).
+        //
+        // !! PENTING !! Urutan indeks sensorData di bawah HARUS
+        // sesuai dengan urutan kolom X = df[[...]] di training script.
+        // Jika urutan salah, prediksi noise meskipun build sukses.
+        //
+        // Model saat ini: randomforest_model (5 fitur)
+        //   modelInput[0] ← sensorData[6]  (kemiringanX,      roll °)
+        //   modelInput[1] ← sensorData[7]  (kemiringanY,      pitch °)
+        //   modelInput[2] ← sensorData[8]  (kecepatanRotasiX, gx °/s)
+        //   modelInput[3] ← sensorData[9]  (kecepatanRotasiY, gy °/s)
+        //   modelInput[4] ← sensorData[10] (kecepatanRotasiZ, gz °/s)
+        // --------------------------------------------------------
+        int16_t modelInput[MODEL_FEATURES_LENGTH];
+        modelInput[0] = (int16_t)sensorData[6];
+        modelInput[1] = (int16_t)sensorData[7];
+        modelInput[2] = (int16_t)sensorData[8];
+        modelInput[3] = (int16_t)sensorData[9];
+        modelInput[4] = (int16_t)sensorData[10];
+
+        // Jalankan inferensi – majority vote across semua trees.
+        // Returns int32_t: kelas prediksi (0–3).
+        int predictedClass = (int)randomforest_model_predict(modelInput, MODEL_FEATURES_LENGTH);
 
         unsigned long timestamp = millis();
 
         // Cetak ke serial monitor untuk debugging
         Serial.print("Roll: ");        Serial.print(kemiringanX, 2);
         Serial.print("\tPitch: ");     Serial.print(kemiringanY, 2);
-        Serial.print("\tClass: ");     Serial.print(classLabel);
+        Serial.print("\tClass: ");     Serial.print(predictedClass);
 
         // Kontrol motor vibrasi berdasarkan hasil prediksi kelas.
         // Kelas 0 → postur yang memerlukan alert → motor ON.
         // Kelas lain (1, 2, 3) → motor OFF.
         // digitalWrite dilakukan setiap siklus PUBLISH_INTERVAL sehingga
         // state motor selalu sinkron dengan prediksi terbaru.
-        if (predictedClass == VIBRATION_TRIGGER_CLASS)
+        // Aktifkan motor untuk kelas postur buruk (0=berdiri_bungkuk, 2=duduk_bungkuk)
+        if (IS_BAD_POSTURE(predictedClass))
         {
             digitalWrite(VIBRATION_MOTOR_PIN, HIGH);
             Serial.println(" [MOTOR ON]");

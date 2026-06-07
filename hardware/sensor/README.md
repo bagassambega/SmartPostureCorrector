@@ -1,10 +1,12 @@
 # sensor — ESP32 Posture Detection with Edge AI
 
-Real-time posture classification firmware for the ESP32 + MPU6050 using an on-device Random Forest model. Every 5 seconds the device reads the IMU, runs inference, and publishes a JSON payload to MQTT:
+Real-time posture classification firmware for the ESP32 + MPU6050 using an on-device edge AI model (emlearn export). Every 5 seconds the device reads the IMU, constructs a feature vector, runs inference, and publishes a JSON payload to MQTT:
 
 ```json
 {"timestamp": 15000, "roll": 2.14, "pitch": -1.03, "class": 0}
 ```
+
+When the predicted class matches `VIBRATION_TRIGGER_CLASS` (default: `0`), a haptic alert is sent to the vibration motor on GPIO5.
 
 ---
 
@@ -13,10 +15,11 @@ Real-time posture classification firmware for the ESP32 + MPU6050 using an on-de
 | Requirement | Notes |
 |---|---|
 | [PlatformIO Core](https://docs.platformio.org/en/latest/core/installation/index.html) | CLI (`pip install platformio`) or VS Code extension |
-| Python ≥ 3.8 | For the model split script |
-| `model/model_rf.h` present at `../../model/model_rf.h` | The trained Random Forest header from Eloquent ML |
-| ESP32 dev board + MPU6050 sensor | SDA → GPIO21, SCL → GPIO22 |
-| MQTT broker reachable on the local network | Default: `192.168.1.10:1883` |
+| ESP32 dev board + MPU6050 | SDA → GPIO21, SCL → GPIO22 |
+| Vibration motor module | IN → GPIO5 (D5), VCC, GND |
+| Calibration button | GPIO14 → GND (uses internal pull-up) |
+| MQTT broker reachable on LAN | Default config: port `1883` |
+| emlearn-exported model header | `<repo_root>/model/<model_name>.h` |
 
 ---
 
@@ -24,71 +27,45 @@ Real-time posture classification firmware for the ESP32 + MPU6050 using an on-de
 
 ```
 hardware/sensor/
-├── include/
-│   └── model_rf_split.h     ← Generated wrapper header (committed)
-├── model/                   ← GITIGNORED — generated RF tree shards
-│   ├── rf_part_0.cpp
-│   ├── rf_part_1.cpp
-│   └── ... rf_part_14.cpp
+├── include/               ← (empty — no generated files)
 ├── src/
-│   └── sensor.cpp           ← Main application
-├── split_rf_model.py        ← Code generation script
+│   └── sensor.cpp         ← Main application
 ├── platformio.ini
+├── split_rf_model.py      ← Legacy script (Eloquent ML, no longer used)
+├── README.md
 └── .gitignore
+
+<repo_root>/model/
+├── randomforest_model.h   ← Current active model (emlearn RF)
+└── extratrees_model.h     ← (example) alternative model
 ```
 
-> **Why is `model/` gitignored?**  
-> The 750-tree Random Forest compiles to ~1.5 MB of firmware. The source shards (`rf_part_*.cpp`) are generated automatically from `model/model_rf.h` and are fully reproducible. Committing 17 MB of generated C++ provides no value and pollutes diffs.
+The compiler include path is configured via `-I../../model` in `platformio.ini`, so any `.h` file in the repo-root `model/` directory is directly includable from `sensor.cpp`.
 
 ---
 
-## Step-by-Step: First-Time Build
+## Build
 
-### 1. Split the model into translation units
-
-This is **required before the first build** (and after every model retrain). The Xtensa LX6 CPU (ESP32) has a 256 KB address range limit per function for floating-point constants. The split script partitions the 750-tree model into 15 separate `.cpp` files — each compiled as its own translation unit — to stay within that limit.
+### 1. Confirm the model header is present
 
 ```bash
-# Run from the project root (hardware/sensor/)
-python3 split_rf_model.py
+ls ../../model/randomforest_model.h
 ```
 
-Expected output:
-
-```
-Reading model...
-Extracting trees...
-  Found 750 trees
-Writing part files (50 trees/file)...
-  Wrote .../model/rf_part_0.cpp  (50 trees)
-  ...
-  Wrote .../model/rf_part_14.cpp  (50 trees)
-Writing header (model_rf_split.h) with 15 parts...
-  Wrote .../include/model_rf_split.h
-
-Done. 750 trees split into 15 TUs.
-```
-
-The script reads from `../../model/model_rf.h` and writes into `model/` and `include/`.
-
-> **Re-run this step** every time a new model is exported from the training pipeline.
-
----
+If missing, request it from the ML team. The file must be committed at `<repo_root>/model/`.
 
 ### 2. Configure WiFi and MQTT
 
-Edit the constants at the top of `src/sensor.cpp`:
+Edit the constants near the top of `src/sensor.cpp`:
 
 ```cpp
 const char *WIFI_SSID   = "YourNetworkName";
 const char *WIFI_PASS   = "YourPassword";
-const char *MQTT_SERVER = "192.168.x.x";   // your broker IP
+const char *MQTT_SERVER = "192.168.x.x";
 const uint16_t MQTT_PORT = 1883;
-const char *MQTT_USER   = "";              // leave empty if no auth
+const char *MQTT_USER   = "";   // leave empty if broker has no auth
 const char *MQTT_PASS   = "";
 ```
-
----
 
 ### 3. Build
 
@@ -99,18 +76,19 @@ const char *MQTT_PASS   = "";
 
 Or via VS Code: **PlatformIO sidebar → Build** (✓ checkmark).
 
-Expected memory usage (approximate):
+Expected output (emlearn RF, 50 trees):
 
 ```
 RAM:   [=         ]  13.8%  (45 KB / 320 KB)
-Flash: [=======   ]  71.9%  (1.5 MB / 2 MB)
+Flash: [====      ]  37.9%  (795 KB / 2 MB)
+========================= [SUCCESS] ============================
 ```
 
-> The project uses the `no_ota.csv` partition scheme to maximize the available code flash region. OTA updates are not supported with this firmware.
+> The project uses the `no_ota.csv` partition scheme for maximum code flash headroom. OTA updates are not supported.
 
 ---
 
-### 4. Upload
+## Deploy (Upload)
 
 Connect the ESP32 via USB, then:
 
@@ -118,46 +96,165 @@ Connect the ESP32 via USB, then:
 ~/.platformio/penv/bin/pio run --target upload
 ```
 
-PlatformIO auto-detects the serial port. If it fails on auto-detect:
+PlatformIO auto-detects the serial port. If auto-detect fails, specify it explicitly:
 
 ```bash
 ~/.platformio/penv/bin/pio run --target upload --upload-port /dev/ttyUSB0
 ```
 
-Replace `/dev/ttyUSB0` with your actual port (`ls /dev/tty*` to list devices).
+Find your port with `ls /dev/ttyUSB* /dev/ttyACM*`.
+
+To build and upload in one command:
+
+```bash
+~/.platformio/penv/bin/pio run --target upload && ~/.platformio/penv/bin/pio device monitor
+```
 
 ---
 
-### 5. Monitor serial output
+## Monitor
 
 ```bash
 ~/.platformio/penv/bin/pio device monitor
 ```
 
-The monitor speed is set to `115200` baud. On startup you will see:
+Baud rate is `115200`. On startup:
 
 ```
 ===== ESP32 SYSTEM INFO =====
 Chip Model: ESP32-D0WDQ6
 ...
-=============================
 Kalibrasi gyro... (pastikan sensor diam)
 Kalibrasi gyro selesai
-Offset X: 12.33
-Offset Y: -4.10
-Offset Z: 0.87
-=================================
+Offset X: 12.33  Offset Y: -4.10  Offset Z: 0.87
 Orientasi dikalibrasi
-Roll offset: 1.04
-Pitch offset: -0.52
-=================================
+Roll offset: 1.04   Pitch offset: -0.52
 Sistem siap. Publish setiap 5000ms
 ```
 
-After calibration, every 5 seconds:
+Every 5 seconds during operation:
 
 ```
-Roll: 2.14    Pitch: -1.03    Class: 0
+Roll: 2.14    Pitch: -1.03    Class: 0 [MOTOR ON]
+Roll: 1.87    Pitch: -0.94    Class: 1 [motor off]
+```
+
+`[MOTOR ON]` appears when the predicted class equals `VIBRATION_TRIGGER_CLASS`.
+
+---
+
+## Changing the Active Model
+
+### What "changing the model" means
+
+An emlearn-exported model is a single self-contained `.h` file containing:
+- One `static inline` C function per tree
+- A `<modelname>_predict(const int16_t*, int32_t)` entry point that performs majority voting
+
+To swap models you change the `#include` and update the predict call — **no splitting, no code generation, no build system changes**.
+
+### Step-by-step: switching to a different emlearn model
+
+Suppose the ML team delivers `extratrees_model.h` (ExtraTrees, same emlearn export format):
+
+**1. Place the new header** in `<repo_root>/model/`:
+```
+model/extratrees_model.h
+```
+
+**2. Update `src/sensor.cpp` — change the include:**
+```cpp
+// Before:
+#include "randomforest_model.h"
+
+// After:
+#include "extratrees_model.h"
+```
+
+**3. Update the predict function call** (the function name follows the filename convention `<modelname>_predict`):
+```cpp
+// Before:
+int predictedClass = (int)randomforest_model_predict(modelInput, MODEL_FEATURES_LENGTH);
+
+// After:
+int predictedClass = (int)extratrees_model_predict(modelInput, MODEL_FEATURES_LENGTH);
+```
+
+**4. Verify and update the feature vector if it changed.**  
+See the section below.
+
+**5. Build and upload:**
+```bash
+~/.platformio/penv/bin/pio run --target upload
+```
+
+### What you do NOT need to change
+
+- `platformio.ini` — the `-I../../model` flag already covers any header in `model/`
+- `bacaSensor()` — all 11 sensor values are always collected regardless of model
+- The `sensorData[11]` snapshot — always populated
+- MQTT publish logic — unchanged
+
+---
+
+## Adjusting the Feature Vector
+
+The sensor firmware always collects all 11 sensor values into `sensorData[]`:
+
+| Index | Variable | Description |
+|---|---|---|
+| `sensorData[0]` | `rawAccX` | Raw accel X (int16) |
+| `sensorData[1]` | `rawAccY` | Raw accel Y (int16) |
+| `sensorData[2]` | `rawAccZ` | Raw accel Z (int16) |
+| `sensorData[3]` | `rawGyroX` | Raw gyro X (int16) |
+| `sensorData[4]` | `rawGyroY` | Raw gyro Y (int16) |
+| `sensorData[5]` | `rawGyroZ` | Raw gyro Z (int16) |
+| `sensorData[6]` | `kemiringanX` | Roll (°, relative to calibration) |
+| `sensorData[7]` | `kemiringanY` | Pitch (°, relative to calibration) |
+| `sensorData[8]` | `kecepatanRotasiX` | Gyro X (°/s, bias-corrected) |
+| `sensorData[9]` | `kecepatanRotasiY` | Gyro Y (°/s, bias-corrected) |
+| `sensorData[10]` | `kecepatanRotasiZ` | Gyro Z (°/s, bias-corrected) |
+
+Only a subset of these is fed into `modelInput[]` for the active model.
+
+### When to update `modelInput[]`
+
+You **must** update `modelInput[]` in `sensor.cpp` when the new model:
+- Uses a **different number of features** → update `MODEL_FEATURES_LENGTH`
+- Uses **different columns** from `sensorData` → update the index assignments
+- Uses **different column order** → reorder the assignments to match
+
+The mapping comment in `sensor.cpp` documents the current configuration:
+
+```cpp
+#define MODEL_FEATURES_LENGTH 5
+
+int16_t modelInput[MODEL_FEATURES_LENGTH];
+modelInput[0] = (int16_t)sensorData[6];   // kemiringanX (roll °)
+modelInput[1] = (int16_t)sensorData[7];   // kemiringanY (pitch °)
+modelInput[2] = (int16_t)sensorData[8];   // kecepatanRotasiX (gx °/s)
+modelInput[3] = (int16_t)sensorData[9];   // kecepatanRotasiY (gy °/s)
+modelInput[4] = (int16_t)sensorData[10];  // kecepatanRotasiZ (gz °/s)
+```
+
+**To verify against the training script**, find the feature selection line in Python:
+
+```python
+X = df[["kemiringanX", "kemiringanY", "kecepatanRotasiX", "kecepatanRotasiY", "kecepatanRotasiZ"]]
+```
+
+The column order in `X` must match the index order in `modelInput[]` exactly. A mismatch will not cause a compile error but will produce wrong predictions.
+
+> **Note on `int16_t`:** emlearn exports models that accept integer input. Float sensor values are cast to `int16_t` via truncation. If the training data used float values (e.g., roll/pitch in degrees), ensure the values were not further scaled before training — otherwise apply the same scale factor here before casting.
+
+---
+
+## Changing the Alert Class
+
+The vibration motor fires when the predicted class equals `VIBRATION_TRIGGER_CLASS`. To change which class triggers the motor, edit the define at the top of `sensor.cpp`:
+
+```cpp
+#define VIBRATION_TRIGGER_CLASS 0   // change to 1, 2, or 3 as needed
 ```
 
 ---
@@ -167,64 +264,35 @@ Roll: 2.14    Pitch: -1.03    Class: 0
 Published to topic `sensors/mpu6050` every **5 seconds**:
 
 ```json
-{
-  "timestamp": 15000,
-  "roll": 2.14,
-  "pitch": -1.03,
-  "class": 0
-}
+{"timestamp": 15000, "roll": 2.14, "pitch": -1.03, "class": 0}
 ```
 
 | Field | Type | Description |
 |---|---|---|
-| `timestamp` | `uint32` | Milliseconds since boot (`millis()`) |
-| `roll` | `float` | Tilt around X-axis (°), relative to calibration position |
-| `pitch` | `float` | Tilt around Y-axis (°), relative to calibration position |
-| `class` | `int` | Predicted posture class: `0`, `1`, `2`, or `3` |
-
----
-
-## Class Labels
-
-The model was trained on four posture classes. Contact the ML team for the mapping; the firmware currently outputs the raw integer index (0–3) matching the training dataset's label encoding.
+| `timestamp` | `uint32` | Milliseconds since boot |
+| `roll` | `float` | Roll angle (°), relative to calibration |
+| `pitch` | `float` | Pitch angle (°), relative to calibration |
+| `class` | `int` | Predicted posture class (0–N) |
 
 ---
 
 ## Hardware Re-calibration
 
-Press and **release** the push button on **GPIO14** at any time. The firmware will:
+Press and **release** the button on GPIO14 at any time. The firmware will:
 
-1. Wait 300 ms for the user to settle.
-2. Re-run gyro bias calibration (200 samples, sensor must be **still**).
+1. Wait 300 ms for the user to settle into position.
+2. Re-sample gyro bias (200 samples, sensor must be **still**).
 3. Set the current orientation as the new roll/pitch zero reference.
 
-The button uses an internal pull-up (`INPUT_PULLUP`), so it reads `HIGH` when idle and `LOW` when pressed. The firmware detects the **rising edge** (release event) with 50 ms debounce.
+The button uses `INPUT_PULLUP` (idle = HIGH, pressed = LOW). The firmware detects the **rising edge** (release event) with 50 ms debounce.
 
 ---
 
-## Rebuild After Model Retrain
+## Why emlearn — Technical Background
 
-When the ML team exports a new `model_rf.h`:
+The previous model (Eloquent ML, 750-tree Random Forest) compiled all tree logic into a single `predict()` function body ~357,000 lines long. The Xtensa LX6 ISA loads float constants via the `l32r` instruction using an 18-bit PC-relative offset, giving a ±256 KB literal pool range. A function that large overflows that range, producing `literal target out of range` linker errors.
 
-1. Replace `../../model/model_rf.h` with the new file.
-2. Re-run the split script:
-   ```bash
-   python3 split_rf_model.py
-   ```
-3. Build and upload:
-   ```bash
-   ~/.platformio/penv/bin/pio run --target upload
-   ```
-
-The `include/model_rf_split.h` wrapper is **regenerated** each time — do not hand-edit it.
-
----
-
-## Why `-mtext-section-literals`?
-
-The Xtensa LX6 ISA loads floating-point constants (thresholds in the decision trees) using the `l32r` instruction, which encodes the constant's address as an 18-bit PC-relative offset. This limits the reachable literal pool to ±256 KB from the instruction. A single predict function spanning 50 trees already exceeds that.
-
-The flag `-mtext-section-literals` (set in `platformio.ini`) instructs the assembler to scatter literal entries inline within the `.text` (code) section instead of aggregating them at the section end, ensuring every `l32r` can always reach its literal. This flag is safe and has no effect on runtime behavior.
+emlearn compiles each tree as a separate `static inline` function with **integer** comparisons — no float constants, no literal pool. Each tree function is independent and small. The 50-tree model is 19,000 lines total, well within any addressing limit. No splitting workaround is needed.
 
 ---
 
@@ -232,9 +300,11 @@ The flag `-mtext-section-literals` (set in `platformio.ini`) instructs the assem
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `model/ does not exist` build error | Split script not run | `python3 split_rf_model.py` |
-| `literal target out of range` linker error | Missing `-mtext-section-literals` in `platformio.ini` | Check `build_flags` in `platformio.ini` |
-| `l32r` assembler error on a single part file | `TREES_PER_FILE` too large | Reduce `TREES_PER_FILE` in `split_rf_model.py` and re-split |
-| MQTT not connecting | Wrong broker IP or firewall | Check `MQTT_SERVER`, ensure broker is reachable |
-| All `class` outputs are `0` | Calibration failed or sensor disconnected | Press recalibration button; check I2C wiring |
-| Garbled serial output | Wrong baud rate | Set monitor to `115200` baud |
+| `fatal error: randomforest_model.h: No such file` | Header not in `model/` | Add the file at `<repo_root>/model/` |
+| `undefined reference to randomforest_model_predict` | Wrong function name after model swap | Match function name to header filename convention `<name>_predict` |
+| Build succeeds but predictions are all wrong class | Feature vector order mismatch | Verify `modelInput[]` order against Python training `X = df[[...]]` |
+| MQTT not connecting | Wrong IP or no broker | Check `MQTT_SERVER`; verify broker is running |
+| Motor never fires | Wrong `VIBRATION_TRIGGER_CLASS` | Match the define to the actual "bad posture" label |
+| Motor always ON | Model always predicts trigger class | Check calibration; verify feature vector mapping |
+| Garbled serial | Wrong baud rate | Set monitor to `115200` baud |
+| `l32r: literal target out of range` | Old Eloquent ML model included directly | Use emlearn export, not Eloquent ML |

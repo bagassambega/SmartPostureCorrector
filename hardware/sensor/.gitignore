@@ -4,5 +4,4 @@
 .vscode/launch.json
 .vscode/ipch
 
-# Generated Random Forest tree shard files (run split_rf_model.py to regenerate)
-/model/
+# (No generated files remain in this project — emlearn model is committed directly)

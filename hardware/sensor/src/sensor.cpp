@@ -5,8 +5,9 @@
 //   { timestamp, roll, pitch, class }
 //
 // Edge AI: emlearn-exported Random Forest (randomforest_model.h).
-// Model takes int16_t features[5]; see feature vector section
-// below for the exact mapping expected by the model.
+// Edge AI: LightGBM (lightgbm_model.h) via C shim (lgbm_shim.c).
+// Model takes double features[8]; see feature vector section below.
+// Output: softmax probabilities over 6 posture classes (argmax → class index).
 // ============================================================
 
 #include <Wire.h>
@@ -18,11 +19,12 @@
 #include "esp_system.h"
 #include "esp_spi_flash.h"
 
-// emlearn Random Forest model.
-// Header lives at <repo_root>/model/randomforest_model.h and is added
-// to the compiler include path via -I../../model in platformio.ini.
-// No splitting, no code generation required – include and compile directly.
-#include "randomforest_model.h"
+// lightgbm_model.h is NOT included here directly.
+// It uses C99 compound literals (double[]){...} which are invalid in C++ mode.
+// Instead, lgbm_shim.c compiles the model header as C, and we declare the
+// entry point here with C linkage to suppress C++ name-mangling.
+// See src/lgbm_shim.c for the full rationale.
+extern "C" void score(double *input, double *output);
 
 // ============================================================
 // TIMING
@@ -56,21 +58,28 @@
 //   HIGH → motor ON, LOW → motor OFF
 #define VIBRATION_MOTOR_PIN 5
 
-// Label encoding yang digunakan saat training model:
+// Label encoding yang digunakan saat training model (LightGBM, 6 kelas):
 //   0 = berdiri_bungkuk (buruk)  ← motor ON
 //   1 = berdiri_tegak   (baik)   ← motor OFF
 //   2 = duduk_bungkuk   (buruk)  ← motor ON
 //   3 = duduk_tegak     (baik)   ← motor OFF
+//   4 = jalan_bungkuk   (buruk)  ← motor ON
+//   5 = jalan_tegak     (baik)   ← motor OFF
 //
-// Macro ini mengevaluasi ke true untuk semua kelas postur buruk.
+// Macro mengevaluasi ke true untuk semua kelas postur buruk (0, 2, 4).
 // Digunakan di loop() untuk mengontrol pin motor vibrasi.
-#define IS_BAD_POSTURE(cls) ((cls) == 0 || (cls) == 2)
+#define IS_BAD_POSTURE(cls) ((cls) == 0 || (cls) == 2 || (cls) == 4)
 
 // Jumlah fitur yang dimasukkan ke model saat ini.
 // Harus sesuai dengan jumlah kolom yang dipilih saat training.
 // Ubah nilai ini dan blok modelInput[] jika model baru menggunakan
 // jumlah fitur yang berbeda.
-#define MODEL_FEATURES_LENGTH 5
+#define MODEL_FEATURES_LENGTH 8
+
+// Jumlah kelas output model saat ini (lightgbm_model: 6 kelas).
+// Digunakan untuk mengalokasikan output buffer dan loop argmax.
+// Ubah jika model baru memiliki jumlah kelas yang berbeda.
+#define MODEL_NUM_CLASSES 6
 
 // ============================================================
 // WIFI & MQTT CONFIGURATION
@@ -336,31 +345,49 @@ void loop()
         // --------------------------------------------------------
         // [2/2] MODEL INPUT VECTOR – subset dari sensorData
         //
-        // emlearn mengharapkan const int16_t[MODEL_FEATURES_LENGTH].
-        // Hanya kolom yang dipakai saat training yang dimasukkan.
-        // Cast float → int16_t menggunakan truncation (bukan rounding).
+        // LightGBM model mengharapkan double*.
+        // Setiap nilai float/int dari sensorData di-cast ke double.
         //
         // !! PENTING !! Urutan indeks sensorData di bawah HARUS
         // sesuai dengan urutan kolom X = df[[...]] di training script.
         // Jika urutan salah, prediksi noise meskipun build sukses.
         //
-        // Model saat ini: randomforest_model (5 fitur)
-        //   modelInput[0] ← sensorData[6]  (kemiringanX,      roll °)
-        //   modelInput[1] ← sensorData[7]  (kemiringanY,      pitch °)
-        //   modelInput[2] ← sensorData[8]  (kecepatanRotasiX, gx °/s)
-        //   modelInput[3] ← sensorData[9]  (kecepatanRotasiY, gy °/s)
-        //   modelInput[4] ← sensorData[10] (kecepatanRotasiZ, gz °/s)
+        // Model saat ini: lightgbm_model (8 fitur)
+        //   modelInput[0] ← sensorData[0]  (rawAccX,          raw accel X)
+        //   modelInput[1] ← sensorData[1]  (rawAccY,          raw accel Y)
+        //   modelInput[2] ← sensorData[2]  (rawAccZ,          raw accel Z)
+        //   modelInput[3] ← sensorData[3]  (rawGyroX,         raw gyro X)
+        //   modelInput[4] ← sensorData[8]  (kecepatanRotasiX, gx °/s)
+        //   modelInput[5] ← sensorData[9]  (kecepatanRotasiY, gy °/s)
+        //   modelInput[6] ← sensorData[6]  (kemiringanX,      roll °)
+        //   modelInput[7] ← sensorData[7]  (kemiringanY,      pitch °)
         // --------------------------------------------------------
-        int16_t modelInput[MODEL_FEATURES_LENGTH];
-        modelInput[0] = (int16_t)sensorData[6];
-        modelInput[1] = (int16_t)sensorData[7];
-        modelInput[2] = (int16_t)sensorData[8];
-        modelInput[3] = (int16_t)sensorData[9];
-        modelInput[4] = (int16_t)sensorData[10];
+        double modelInput[MODEL_FEATURES_LENGTH];
+        modelInput[0] = (double)sensorData[0];   // rawAccX
+        modelInput[1] = (double)sensorData[1];   // rawAccY
+        modelInput[2] = (double)sensorData[2];   // rawAccZ
+        modelInput[3] = (double)sensorData[3];   // rawGyroX
+        modelInput[4] = (double)sensorData[8];   // kecepatanRotasiX (gx °/s)
+        modelInput[5] = (double)sensorData[9];   // kecepatanRotasiY (gy °/s)
+        modelInput[6] = (double)sensorData[6];   // kemiringanX (roll °)
+        modelInput[7] = (double)sensorData[7];   // kemiringanY (pitch °)
 
-        // Jalankan inferensi – majority vote across semua trees.
-        // Returns int32_t: kelas prediksi (0–3).
-        int predictedClass = (int)randomforest_model_predict(modelInput, MODEL_FEATURES_LENGTH);
+        // Jalankan inferensi.
+        // score() menulis softmax probabilities ke lgbmOutput[].
+        // Tidak ada built-in argmax – cari indeks dengan nilai tertinggi.
+        //
+        // Catatan performa: score() menggunakan double (64-bit float).
+        // Xtensa LX6 tidak memiliki FPU untuk double – operasi dilakukan
+        // oleh software runtime GCC. Untuk interval 5 detik ini tidak
+        // bermasalah, tetapi jangan gunakan model ini di loop cepat (<100ms).
+        double lgbmOutput[MODEL_NUM_CLASSES];
+        score(modelInput, lgbmOutput);
+
+        int predictedClass = 0;
+        for (int i = 1; i < MODEL_NUM_CLASSES; i++) {
+            if (lgbmOutput[i] > lgbmOutput[predictedClass])
+                predictedClass = i;
+        }
 
         unsigned long timestamp = millis();
 

@@ -16,7 +16,7 @@
 const char *WIFI_SSID = "A15";
 const char *WIFI_PASS = "saynotoclankers";
 
-const char *MQTT_SERVER = "10.29.236.51";
+const char *MQTT_SERVER = "10.14.131.51";
 const uint16_t MQTT_PORT = 1883;
 
 const char *MQTT_TOPIC = "sensors/posture";

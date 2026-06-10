@@ -209,21 +209,26 @@
 
   <script>
     // Mapping dari label string postur ke nama tampilan Indonesia.
-    // Harus mencakup semua 4 kelas output model RF.
+    // Mencakup semua 6 kelas output model LightGBM.
     const postureLabels = {
       berdiri_bungkuk: 'Berdiri Bungkuk',
       berdiri_tegak:   'Berdiri Tegak',
       duduk_bungkuk:   'Duduk Bungkuk',
-      duduk_tegak:     'Duduk Tegak'
+      duduk_tegak:     'Duduk Tegak',
+      jalan_bungkuk:   'Jalan Bungkuk',
+      jalan_tegak:     'Jalan Tegak'
     };
 
     // Warna per postur untuk chart distribusi dan badge status.
-    // Merah  = postur buruk (bungkuk), Hijau/Teal = postur baik (tegak).
+    // Merah/oranye/fuchsia = postur buruk (bungkuk).
+    // Teal/hijau/ungu      = postur baik  (tegak).
     const postureColors = {
-      berdiri_bungkuk: '#ef4444',   // merah  – buruk
-      berdiri_tegak:   '#2dd4bf',   // teal   – baik
-      duduk_bungkuk:   '#f97316',   // oranye – buruk
-      duduk_tegak:     '#22c55e'    // hijau  – baik
+      berdiri_bungkuk: '#ef4444',   // merah    – buruk
+      berdiri_tegak:   '#2dd4bf',   // teal     – baik
+      duduk_bungkuk:   '#f97316',   // oranye   – buruk
+      duduk_tegak:     '#22c55e',   // hijau    – baik
+      jalan_bungkuk:   '#e879f9',   // fuchsia  – buruk
+      jalan_tegak:     '#818cf8'    // indigo   – baik
     };
 
     const activeDeviceEl = document.getElementById('activeDevice');

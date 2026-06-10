@@ -7,26 +7,33 @@ import (
 )
 
 // Posture label constants – must match the label encoding used during model training:
-//   {'berdiri_bungkuk': 0, 'berdiri_tegak': 1, 'duduk_bungkuk': 2, 'duduk_tegak': 3}
+//   {'berdiri_bungkuk': 0, 'berdiri_tegak': 1, 'duduk_bungkuk': 2,
+//    'duduk_tegak': 3,     'jalan_bungkuk': 4, 'jalan_tegak':   5}
 const (
-	PostureBerdiirBungkuk = "berdiri_bungkuk" // class 0 – bad
+	PostureBerdiriBungkuk = "berdiri_bungkuk" // class 0 – bad
 	PostureBerdiriTegak   = "berdiri_tegak"   // class 1 – good
 	PostureDudukBungkuk   = "duduk_bungkuk"   // class 2 – bad
 	PostureDudukTegak     = "duduk_tegak"     // class 3 – good
+	PostureJalanBungkuk   = "jalan_bungkuk"   // class 4 – bad
+	PostureJalanTegak     = "jalan_tegak"     // class 5 – good
 )
 
 // ValidPostures maps every posture label string to its integer class code.
-// Both "bungkuk" variants (0, 2) are bad postures; both "tegak" variants (1, 3) are good.
+// "bungkuk" variants (0, 2, 4) are bad postures; "tegak" variants (1, 3, 5) are good.
 var ValidPostures = map[string]int{
-	PostureBerdiirBungkuk: 0,
+	PostureBerdiriBungkuk: 0,
 	PostureBerdiriTegak:   1,
 	PostureDudukBungkuk:   2,
 	PostureDudukTegak:     3,
+	PostureJalanBungkuk:   4,
+	PostureJalanTegak:     5,
 }
 
 // IsBadPosture returns true for any "bungkuk" (slouched) posture class.
 func IsBadPosture(posture string) bool {
-	return posture == PostureBerdiirBungkuk || posture == PostureDudukBungkuk
+	return posture == PostureBerdiriBungkuk ||
+		posture == PostureDudukBungkuk ||
+		posture == PostureJalanBungkuk
 }
 
 // PostureFromCode resolves a numeric RF class output to its label string.
@@ -79,13 +86,13 @@ func (p *PosturePayload) Validate() error {
 }
 
 // SensorPayload matches the JSON published by the ESP32 firmware on sensors/mpu6050:
-//   {"timestamp":<ms>, "roll":<deg>, "pitch":<deg>, "class":<0-3>}
-// The "class" field carries the on-device Random Forest prediction.
+//   {"timestamp":<ms>, "roll":<deg>, "pitch":<deg>, "class":<0-5>}
+// The "class" field carries the on-device LightGBM prediction.
 type SensorPayload struct {
 	Timestamp uint64  `json:"timestamp"`
 	Roll      float64 `json:"roll"`
 	Pitch     float64 `json:"pitch"`
-	Class     int     `json:"class"` // emlearn RF output: 0=berdiri_bungkuk 1=berdiri_tegak 2=duduk_bungkuk 3=duduk_tegak
+	Class     int     `json:"class"` // LightGBM output: 0=berdiri_bungkuk 1=berdiri_tegak 2=duduk_bungkuk 3=duduk_tegak 4=jalan_bungkuk 5=jalan_tegak
 }
 
 func (p *SensorPayload) Validate() error {

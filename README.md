@@ -1,6 +1,8 @@
-# Encok-Cok: Sensor MPU6050 dengan ESP32
+# Smart Posture Corrector: Sensor MPU6050 dengan ESP32
 
 Proyek ini mendemonstrasikan cara menggunakan sensor gyroscope dan accelerometer MPU6050 dengan ESP32 DevKit V1 untuk mengukur orientasi dan gerakan.
+Proyek ini dibuat untuk mendeteksi pola postur pengguna, agar pengguna mengetahui jika postur duduk/berdiri/jalannya buruk dalam waktu yang lama
+
 
 ---
 
